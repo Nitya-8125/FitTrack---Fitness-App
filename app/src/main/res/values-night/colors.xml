@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Purples -->
+    <color name="purple_200">#5B21B6</color>   <!-- darker lavender -->
+    <color name="purple_500">#C4B5FD</color>   <!-- softer violet -->
+    <color name="purple_700">#E9D5FF</color>
+    <color name="purple_300">#A78BFA</color>
+
+    <!-- Blues -->
+    <color name="blue_500">#60A5FA</color>
+    <color name="blue_100">#1E3A8A</color>
+    <color name="blue">#64B5F6</color> <!-- Material Blue lighter -->
+
+    <!-- Teals -->
+    <color name="teal_200">#80CBC4</color>
+    <color name="teal_700">#26A69A</color>
+    <color name="teal">#4DB6AC</color>
+    <color name="teal_100">#134E4A</color>
+
+    <!-- Ambers -->
+    <color name="amber_500">#FBBF24</color>
+    <color name="amber_100">#92400E</color>
+
+    <!-- Oranges -->
+    <color name="orange_500">#FB923C</color>
+    <color name="orange_200">#7C2D12</color>
+    <color name="orange">#FFB74D</color>
+
+    <!-- Basics -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="red">#FF6B6B</color>
+    <color name="green">#4ADE80</color>
+    <color name="purple">#BA68C8</color>
+
+    <!-- Navigation -->
+    <color name="nav_text_color">#E0E0E0</color>
+    <color name="nav_icon_color">#B0B0B0</color>
+
+    <!-- Surfaces -->
+    <color name="bgSurface">#1E1E1E</color>
+    <color name="bg">#121212</color>
+    <color name="surface">#1F2937</color>
+    <color name="surface_stroke">#2D2D2D</color>
+
+    <!-- White overlays -->
+    <color name="white_80">#CC000000</color>
+    <color name="white_60">#99000000</color>
+    <color name="white_30">#4D000000</color>
+
+    <!-- Text -->
+    <color name="textPrimary">#F5F5F5</color>
+    <color name="textSecondary">#A3A3A3</color>
+    <color name="text_primary">#F3F4F6</color>
+    <color name="text_secondary">#9CA3AF</color>
+
+    <!-- Small accents -->
+    <color name="chipPremiumBg">#3B2D5F</color>
+
+    <!-- Brand/accents -->
+    <color name="primary_600">#16A34A</color>
+    <color name="primary_500">#22C55E</color>
+    <color name="primary_700">#15803D</color>
+
+    <!-- Chart placeholder tints -->
+    <color name="chart_blue_100">#1E3A8A</color>
+    <color name="chart_blue_300">#3B82F6</color>
+    <color name="chart_purple_200">#6D28D9</color>
+
+</resources>

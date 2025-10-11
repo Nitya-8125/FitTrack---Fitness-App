@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/mobile_navigation"
+    app:startDestination="@id/nav_home">
+
+    <!-- Home -->
+    <fragment
+        android:id="@+id/nav_home"
+        android:name="com.example.fittrack.ui.home.HomeFragment"
+        android:label="@string/menu_home"
+        tools:layout="@layout/fragment_home" />
+
+    <!-- Analysis -->
+    <fragment
+        android:id="@+id/nav_analysis"
+        android:name="com.example.fittrack.ui.analysis.AnalysisFragment"
+        android:label="@string/menu_analysis"
+        tools:layout="@layout/fragment_analysis" />
+
+    <!-- Achievements -->
+    <fragment
+        android:id="@+id/nav_settings"
+        android:name="com.example.fittrack.ui.settings.SettingsFragment"
+        android:label="@string/menu_settings"
+        tools:layout="@layout/fragment_settings" />
+
+    <!-- Profile -->
+    <fragment
+        android:id="@+id/nav_profile"
+        android:name="com.example.fittrack.Profile"
+        android:label="@string/menu_profile"
+        tools:layout="@layout/fragment_profile" />
+
+</navigation>
+
+
+    <!--<?xml version="1.0" encoding="utf-8"?>-->
+<!--<navigation xmlns:android="http://schemas.android.com/apk/res/android"-->
+<!--    xmlns:app="http://schemas.android.com/apk/res-auto"-->
+<!--    xmlns:tools="http://schemas.android.com/tools"-->
+<!--    android:id="@+id/mobile_navigation"-->
+<!--    app:startDestination="@+id/nav_home">-->
+
+<!--    <fragment-->
+<!--        android:id="@+id/nav_home"-->
+<!--        android:name="com.example.fittrack.ui.home.HomeFragment"-->
+<!--        android:label="@string/menu_home"-->
+<!--        tools:layout="@layout/fragment_home" />-->
+
+<!--    <fragment-->
+<!--        android:id="@+id/nav_analysis"-->
+<!--        android:name="com.example.fittrack.ui.analysis.AnalysisFragment"-->
+<!--        android:label="@string/menu_analysis"-->
+<!--        tools:layout="@layout/fragment_analysis" />-->
+
+<!--    <fragment-->
+<!--        android:id="@+id/nav_slideshow"-->
+<!--        android:name="com.example.fittrack.ui.slideshow.SlideshowFragment"-->
+<!--        android:label="@string/menu_achievement"-->
+<!--        tools:layout="@layout/fragment_slideshow" />-->
+<!--    <fragment-->
+<!--        android:id="@+id/nav_profile"-->
+<!--        android:name="com.example.fittrack.Profile"-->
+<!--        android:label="@string/menu_profile"-->
+<!--        tools:layout="@layout/fragment_profile"/>-->
+<!--</navigation>-->

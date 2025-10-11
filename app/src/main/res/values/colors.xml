@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_200">#e9d5ff</color>
+    <color name="purple_500">#8b5cf6</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="blue_500">#3b82f6</color>
+    <color name="blue_100">#dbeafe</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="teal_900">#004D40</color>
+    <color name="amber_500">#f59e0b</color>
+    <color name="amber_100">#fef3c7</color>
+    <color name="orange_500">#f97316</color>
+    <color name="orange_200">#fed7aa</color>
+    <color name="black">#FF000000</color>
+    <color name="red">#FF0000</color>
+    <color name="green">#008000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="nav_text_color">#222222</color>
+    <color name="nav_icon_color">#666666</color>
+    <color name="blue">#2196F3</color>     <!-- Material Blue -->
+    <color name="orange">#FF9800</color>   <!-- Material Orange -->
+    <color name="purple">#9C27B0</color>   <!-- optional -->
+    <color name="teal">#009688</color>     <!-- optional -->
+    <color name="purple_300">#C18CFF</color>
+    <color name="blue_700">#1976D2</color> <!-- you can change to any shade of blue you like -->
+
+
+    <!-- Surfaces -->
+    <color name="bgSurface">#F5F6FA</color>
+    <color name="white_80">#CCFFFFFF</color>
+    <color name="white_60">#99FFFFFF</color>
+    <color name="white_30">#4DFFFFFF</color>
+
+    <!-- Text -->
+    <color name="textPrimary">#1C1C28</color>
+    <color name="textSecondary">#7A7F8C</color>
+
+    <!-- Small accents -->
+    <color name="chipPremiumBg">#EAE5FF</color>
+
+    <color name="bg">#F5F7FB</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_stroke">#E7EAF0</color>
+
+    <!-- Text -->
+    <color name="text_primary">#0F172A</color>
+    <color name="text_secondary">#6B7280</color>
+
+
+    <!-- Brand/accents matching screenshot vibe -->
+    <color name="primary_600">#22C55E</color>
+    <color name="primary_500">#34D399</color>
+    <color name="primary_700">#16A34A</color>
+
+    <!-- Icon bubble fills -->
+    <color name="teal_100">#D1FAE5</color>
+
+    <!-- Chart placeholder tints -->
+    <color name="chart_blue_100">#E6F0FF</color>
+    <color name="chart_blue_300">#CFE1FF</color>
+    <color name="chart_purple_200">#E7D7FF</color>
+    <color name="white_translucent">#B3FFFFFF</color>
+    <color name="bg_light">#F6F7FB</color>
+    <color name="card_bg">#FFFFFF</color>
+    <color name="divider">#E6E6E6</color>
+
+    <!-- header gradient colors matching screenshot -->
+    <color name="blue_start">#4EA1FF</color>
+    <color name="blue_end">#9BCBFF</color>
+
+    <color name="red_btn">#E53935</color>
+
+</resources>

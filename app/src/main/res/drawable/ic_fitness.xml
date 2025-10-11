@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Dumbbell -->
+    <path android:fillColor="@android:color/black" android:pathData="M2,9h2v6h-2z" />
+    <path android:fillColor="@android:color/black" android:pathData="M4,7h2v10h-2z" />
+    <path android:fillColor="@android:color/black" android:pathData="M6,11h12v2h-12z" />
+    <path android:fillColor="@android:color/black" android:pathData="M18,7h2v10h-2z" />
+    <path android:fillColor="@android:color/black" android:pathData="M20,9h2v6h-2z" />
+
+    <!-- Sparkle -->
+    <path
+        android:fillColor="@android:color/holo_blue_light"
+        android:pathData="M12,3 L13,6 L16,7 L13,8 L12,11 L11,8 L8,7 L11,6 Z" />
+</vector>

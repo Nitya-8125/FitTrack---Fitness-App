@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="LabelSmall">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/textSecondary</item>
+    </style>
+
+    <style name="ValueLarge">
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/textPrimary</item>
+        <item name="android:layout_marginBottom">8dp</item>
+    </style>
+
+    <style name="DividerThin">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">1dp</item>
+        <item name="android:background">#1A000000</item>
+        <item name="android:layout_marginVertical">8dp</item>
+    </style>
+
+    <style name="FieldLabel">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/textSecondary</item>
+    </style>
+
+    <style name="FieldContainer">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="boxBackgroundMode">filled</item>
+        <item name="boxCornerRadiusTopStart">12dp</item>
+        <item name="boxCornerRadiusTopEnd">12dp</item>
+        <item name="boxCornerRadiusBottomStart">12dp</item>
+        <item name="boxCornerRadiusBottomEnd">12dp</item>
+        <item name="boxBackgroundColor">@color/white</item>
+    </style>
+    <style name="Dashboard.InfoCard" parent="Widget.MaterialComponents.CardView">
+        <item name="cardCornerRadius">16dp</item>
+        <item name="cardUseCompatPadding">true</item>
+        <item name="cardElevation">2dp</item>
+        <item name="strokeColor">@color/surface_stroke</item>
+        <item name="strokeWidth">1dp</item>
+    </style>
+
+    <style name="Dashboard.ChartCard" parent="Widget.MaterialComponents.CardView">
+        <item name="cardCornerRadius">16dp</item>
+        <item name="cardUseCompatPadding">true</item>
+        <item name="cardElevation">2dp</item>
+        <item name="strokeColor">@color/surface_stroke</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="android:layout_marginBottom">14dp</item>
+    </style>
+</resources>

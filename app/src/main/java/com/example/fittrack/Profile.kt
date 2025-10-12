@@ -1,141 +1,100 @@
-package com.example.fittrack
+package com.example.fittrack.ui.profile
 
 import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import android.widget.*
 import androidx.fragment.app.Fragment
-import com.example.fittrack.databinding.FragmentProfileBinding
-import android.database.Cursor
+import com.example.fittrack.DatabaseHelper
+import com.example.fittrack.R
+import com.example.fittrack.SessionManager
+import com.example.fittrack.LoginActivity
 
 class ProfileFragment : Fragment() {
 
-    private var _binding: FragmentProfileBinding? = null
-    private val binding get() = _binding!!
-
-    private lateinit var session: SessionManager
     private lateinit var dbHelper: DatabaseHelper
+    private lateinit var session: SessionManager
+
+    private lateinit var tvName: TextView
+    private lateinit var tvEmail: TextView
+    private lateinit var etStepsGoal: EditText
+    private lateinit var etCaloriesGoal: EditText
+    private lateinit var etTargetWeight: EditText
+    private lateinit var btnUpdateGoals: Button
+    private lateinit var btnLogout: Button
+
+    private var email: String = ""
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        _binding = FragmentProfileBinding.inflate(inflater, container, false)
-        session = SessionManager(requireContext())
+        val view = inflater.inflate(R.layout.fragment_profile, container, false)
+
+        // Initialize UI components
+        tvName = view.findViewById(R.id.tvName)
+        tvEmail = view.findViewById(R.id.tvEmail)
+        etStepsGoal = view.findViewById(R.id.etStepsGoal)
+        etCaloriesGoal = view.findViewById(R.id.etCaloriesGoal)
+        etTargetWeight = view.findViewById(R.id.etTargetWeight)
+        btnUpdateGoals = view.findViewById(R.id.btnUpdateGoals)
+        btnLogout = view.findViewById(R.id.btnLogout)
+
         dbHelper = DatabaseHelper(requireContext())
+        session = SessionManager(requireContext())
+        email = session.getUserEmail() ?: ""
 
-        populateUserData()
-        loadGoals()
+        // Load user data (name, email, goals)
+        loadUserData()
 
-        // Save goals button
-        binding.btnSaveGoals.setOnClickListener { saveGoals() }
+        // Button actions
+        btnUpdateGoals.setOnClickListener { updateGoals() }
+        btnLogout.setOnClickListener { logoutUser() }
 
-        // Logout button
-        binding.btnLogout.setOnClickListener { confirmLogout() }
-
-        return binding.root
+        return view
     }
 
-    /** Populate user details from session */
-    private fun populateUserData() {
-        val firstName = session.getFirstName() ?: ""
-        val lastName = session.getLastName() ?: ""
-        val email = session.getUserEmail() ?: ""
-        val age = session.getUserAge()
-        val height = session.getUserHeight()
+    private fun loadUserData() {
+        val cursor = dbHelper.getUserByEmail(email)
+        if (cursor != null && cursor.moveToFirst()) {
+            // Display Name and Email
+            val firstName = cursor.getString(cursor.getColumnIndexOrThrow("firstName"))
+            tvName.text = firstName
+            tvEmail.text = email
 
-        val initials = "${firstName.firstOrNull() ?: ""}${lastName.firstOrNull() ?: ""}".uppercase()
-        binding.tvInitials.text = initials
-        binding.tvEmail.text = email
-        binding.tvName.text = "$firstName $lastName".trim()
-        binding.tvAge.text = "$age years"
-        binding.tvHeight.text = "$height cm"
-    }
-
-    /** Load stored goals from database */
-    private fun loadGoals() {
-        val email = session.getUserEmail() ?: return
-        val cursor: Cursor? = dbHelper.getGoals(email)
-
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val steps = it.getInt(it.getColumnIndexOrThrow("daily_steps_goal"))
-                val calories = it.getInt(it.getColumnIndexOrThrow("daily_calories_goal"))
-                val targetWeight = it.getDouble(it.getColumnIndexOrThrow("target_weight"))
-
-                // Ensure these are EditText in XML
-                binding.tvStepsGoal.setText(steps.toString())
-                binding.tvCaloriesGoal.setText(calories.toString())
-                binding.tvTargetWeight.setText(targetWeight.toString())
-            }
+            // Display Goals
+            etStepsGoal.setText(cursor.getInt(cursor.getColumnIndexOrThrow("daily_steps_goal")).toString())
+            etCaloriesGoal.setText(cursor.getInt(cursor.getColumnIndexOrThrow("daily_calories_goal")).toString())
+            etTargetWeight.setText(cursor.getDouble(cursor.getColumnIndexOrThrow("target_weight")).toString())
         }
+        cursor?.close()
     }
 
-    /** Save updated goals */
-    private fun saveGoals() {
-        val email = session.getUserEmail() ?: return
+    private fun updateGoals() {
+        val steps = etStepsGoal.text.toString().toIntOrNull()
+        val calories = etCaloriesGoal.text.toString().toIntOrNull()
+        val targetWeight = etTargetWeight.text.toString().toDoubleOrNull()
 
-        val steps = binding.tvStepsGoal.text.toString().toIntOrNull() ?: 10000
-        val calories = binding.tvCaloriesGoal.text.toString().toIntOrNull() ?: 2000
-        val targetWeight = binding.tvTargetWeight.text.toString().toFloatOrNull() ?: 70f
+        if (steps == null || calories == null || targetWeight == null) {
+            Toast.makeText(requireContext(), "Enter valid values", Toast.LENGTH_SHORT).show()
+            return
+        }
 
         val success = dbHelper.updateGoals(email, steps, calories, targetWeight)
-
         if (success) {
             Toast.makeText(requireContext(), "Goals updated successfully!", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(requireContext(), "Failed to update goals.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "Failed to update goals!", Toast.LENGTH_SHORT).show()
         }
     }
 
-    /** Confirm before logout */
-    private fun confirmLogout() {
-        AlertDialog.Builder(requireContext())
-            .setTitle("Logout")
-            .setMessage("Are you sure you want to log out?")
-            .setPositiveButton("Yes") { _, _ ->
-                session.logout()
-                val intent = Intent(requireContext(), LoginActivity::class.java)
-                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                startActivity(intent)
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    /** Refresh profile data from DB */
-    override fun onResume() {
-        super.onResume()
-        loadUserProfile()
-    }
-
-    private fun loadUserProfile() {
-        val email = session.getUserEmail() ?: return
-        val cursor: Cursor? = dbHelper.getUserByEmail(email)
-
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val fName = it.getString(it.getColumnIndexOrThrow("firstName"))
-                val lName = it.getString(it.getColumnIndexOrThrow("lastName"))
-                val age = it.getInt(it.getColumnIndexOrThrow("age"))
-                val height = it.getDouble(it.getColumnIndexOrThrow("height"))
-
-                binding.tvName.text = "$fName $lName"
-                binding.tvAge.text = "Age: $age"
-                binding.tvHeight.text = "Height: $height cm"
-            }
-        }
-    }
-
-    override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
-    }
-
-    companion object {
-        fun newInstance() = ProfileFragment()
+    private fun logoutUser() {
+        session.clearSession() // Clear saved email
+        // Redirect to LoginActivity
+        val loginIntent = Intent(requireContext(), LoginActivity::class.java)
+        loginIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        startActivity(loginIntent)
     }
 }

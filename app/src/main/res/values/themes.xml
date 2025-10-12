@@ -20,6 +20,10 @@
         <item name="windowNoTitle">true</item>
     </style>
 
+    <style name="Theme.AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+    </style>
+
     <style name="Theme.FitTrack.AppBarOverlay" parent="ThemeOverlay.AppCompat.Dark.ActionBar" />
 
     <style name="Theme.FitTrack.PopupOverlay" parent="ThemeOverlay.AppCompat.Light" />

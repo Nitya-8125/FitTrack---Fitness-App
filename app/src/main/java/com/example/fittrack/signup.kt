@@ -49,9 +49,8 @@ class SignupActivity : AppCompatActivity() {
 
     private fun showStep(step: Int) {
         val inflater = layoutInflater
-        val stepView = when (step) {
+        val stepView: View? = when (step) {
 
-            // Step 1: Email + Password
             0 -> inflater.inflate(R.layout.layout_step_account, stepContainer, false).apply {
                 val etEmail: EditText = findViewById(R.id.inputEmail)
                 val etPassword: EditText = findViewById(R.id.inputPassword)
@@ -62,38 +61,8 @@ class SignupActivity : AppCompatActivity() {
                 etConfirmPassword.setText(userData["confirmPassword"] ?: "")
 
                 btnNext.text = "Next"
-                btnNext.setOnClickListener {
-                    val email = etEmail.text.toString().trim()
-                    val password = etPassword.text.toString().trim()
-                    val confirmPassword = etConfirmPassword.text.toString().trim()
-
-                    if (email.isEmpty() || password.isEmpty() || confirmPassword.isEmpty()) {
-                        Snackbar.make(this, "All fields are required", Snackbar.LENGTH_SHORT).show()
-                        return@setOnClickListener
-                    }
-                    if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-                        etEmail.error = "Invalid email"
-                        return@setOnClickListener
-                    }
-                    if (password.length < 6) {
-                        etPassword.error = "Password must be at least 6 characters"
-                        return@setOnClickListener
-                    }
-                    if (password != confirmPassword) {
-                        etConfirmPassword.error = "Passwords do not match"
-                        return@setOnClickListener
-                    }
-
-                    userData["email"] = email
-                    userData["password"] = password
-                    userData["confirmPassword"] = confirmPassword
-
-                    currentStep++
-                    showStep(currentStep)
-                }
             }
 
-            // Step 2: Personal Info + Weight/Height
             1 -> inflater.inflate(R.layout.layout_step_personal, stepContainer, false).apply {
                 val etFirstName: EditText = findViewById(R.id.inputFirstName)
                 val etLastName: EditText = findViewById(R.id.inputLastName)
@@ -119,18 +88,74 @@ class SignupActivity : AppCompatActivity() {
                 }
 
                 btnNext.text = "Create Account"
-                btnNext.setOnClickListener {
+            }
+
+            else -> null
+        }
+
+        stepContainer.removeAllViews()
+        stepView?.let { stepContainer.addView(it) }
+
+        // Update Progress
+        progressBar.progress = ((step + 1) * 100 / 2)
+        btnPrevious.visibility = if (step == 0) View.GONE else View.VISIBLE
+
+        // Set btnNext click listener after inflating step
+        btnNext.setOnClickListener {
+            when (currentStep) {
+                0 -> {
+                    val etEmail: EditText = stepView!!.findViewById(R.id.inputEmail)
+                    val etPassword: EditText = stepView.findViewById(R.id.inputPassword)
+                    val etConfirmPassword: EditText = stepView.findViewById(R.id.inputConfirmPassword)
+
+                    val email = etEmail.text.toString().trim()
+                    val password = etPassword.text.toString().trim()
+                    val confirmPassword = etConfirmPassword.text.toString().trim()
+
+                    if (email.isEmpty() || password.isEmpty() || confirmPassword.isEmpty()) {
+                        Snackbar.make(stepContainer, "All fields are required", Snackbar.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+                        etEmail.error = "Invalid email"
+                        return@setOnClickListener
+                    }
+                    if (password.length < 6) {
+                        etPassword.error = "Password must be at least 6 characters"
+                        return@setOnClickListener
+                    }
+                    if (password != confirmPassword) {
+                        etConfirmPassword.error = "Passwords do not match"
+                        return@setOnClickListener
+                    }
+
+                    userData["email"] = email
+                    userData["password"] = password
+                    userData["confirmPassword"] = confirmPassword
+
+                    currentStep++
+                    showStep(currentStep)
+                }
+
+                1 -> {
+                    val etFirstName: EditText = stepView!!.findViewById(R.id.inputFirstName)
+                    val etLastName: EditText = stepView.findViewById(R.id.inputLastName)
+                    val etAge: EditText = stepView.findViewById(R.id.inputAge)
+                    val etWeight: EditText = stepView.findViewById(R.id.inputWeight)
+                    val etHeight: EditText = stepView.findViewById(R.id.inputHeight)
+                    val spinnerGender: Spinner = stepView.findViewById(R.id.spinnerGender)
+
                     val firstName = etFirstName.text.toString().trim()
                     val lastName = etLastName.text.toString().trim()
                     val ageStr = etAge.text.toString().trim()
                     val weightStr = etWeight.text.toString().trim()
                     val heightStr = etHeight.text.toString().trim()
-                    val gender = spinnerGender.selectedItem?.toString() ?: ""
+                    val gender = spinnerGender.selectedItem.toString()
 
                     if (firstName.isEmpty() || lastName.isEmpty() || ageStr.isEmpty() ||
                         weightStr.isEmpty() || heightStr.isEmpty() || gender.isEmpty()
                     ) {
-                        Snackbar.make(this, "All fields are required", Snackbar.LENGTH_SHORT).show()
+                        Snackbar.make(stepContainer, "All fields are required", Snackbar.LENGTH_SHORT).show()
                         return@setOnClickListener
                     }
 
@@ -161,7 +186,6 @@ class SignupActivity : AppCompatActivity() {
                     val email = userData["email"] ?: ""
                     val password = userData["password"] ?: ""
 
-                    // ✅ Correct DB registration call with default goals
                     val success = dbHelper.registerUser(
                         email, password,
                         firstName, lastName, age, gender,
@@ -169,22 +193,14 @@ class SignupActivity : AppCompatActivity() {
                     )
 
                     if (success) {
-                        Snackbar.make(this, "Account Created Successfully!", Snackbar.LENGTH_LONG).show()
+                        Snackbar.make(stepContainer, "Account Created Successfully!", Snackbar.LENGTH_LONG).show()
                         startActivity(Intent(this@SignupActivity, LoginActivity::class.java))
                         finish()
                     } else {
-                        Snackbar.make(this, "Registration failed (email may exist)", Snackbar.LENGTH_LONG).show()
+                        Snackbar.make(stepContainer, "Registration failed (email may exist)", Snackbar.LENGTH_LONG).show()
                     }
                 }
             }
-
-            else -> null
         }
-
-        stepContainer.removeAllViews()
-        stepView?.let { stepContainer.addView(it) }
-
-        progressBar.progress = ((step + 1) * 100 / 2)
-        btnPrevious.visibility = if (step == 0) View.GONE else View.VISIBLE
     }
 }

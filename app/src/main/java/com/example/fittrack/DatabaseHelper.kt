@@ -13,9 +13,10 @@ class DatabaseHelper(context: Context) :
 
     companion object {
         private const val DATABASE_NAME = "ftusers.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
         private const val TABLE_USERS = "users"
         private const val TABLE_DAILY_STATS = "daily_stats"
+        private const val TABLE_HOURLY_STATS = "daily_hourly_stats"
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -26,6 +27,7 @@ class DatabaseHelper(context: Context) :
                 password TEXT,
                 firstName TEXT,
                 lastName TEXT,
+                userType TEXT DEFAULT 'user',
                 age INTEGER,
                 gender TEXT,
                 height REAL,
@@ -52,16 +54,30 @@ class DatabaseHelper(context: Context) :
             )
         """.trimIndent()
         db.execSQL(createDailyStatsTable)
+
+        val createHourlyStatsTable = """
+            CREATE TABLE $TABLE_HOURLY_STATS (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT,
+                date TEXT,
+                hour INTEGER,
+                steps INTEGER DEFAULT 0,
+                calories INTEGER DEFAULT 0,
+                weight REAL DEFAULT 0,
+                UNIQUE(email, date, hour)
+            )
+        """.trimIndent()
+        db.execSQL(createHourlyStatsTable)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         db.execSQL("DROP TABLE IF EXISTS $TABLE_USERS")
         db.execSQL("DROP TABLE IF EXISTS $TABLE_DAILY_STATS")
+        db.execSQL("DROP TABLE IF EXISTS $TABLE_HOURLY_STATS")
         onCreate(db)
     }
 
     // ---------------- User Functions ----------------
-
     fun registerUser(
         email: String,
         password: String,
@@ -70,7 +86,8 @@ class DatabaseHelper(context: Context) :
         age: Int,
         gender: String,
         height: Double,
-        weight: Double
+        weight: Double,
+        userType: String = "user"
     ): Boolean {
         if (isEmailTaken(email)) return false
         val db = writableDatabase
@@ -79,6 +96,7 @@ class DatabaseHelper(context: Context) :
             put("password", password)
             put("firstName", firstName)
             put("lastName", lastName)
+            put("userType", userType)
             put("age", age)
             put("gender", gender)
             put("height", height)
@@ -105,6 +123,20 @@ class DatabaseHelper(context: Context) :
         return db.query(TABLE_USERS, null, "email = ?", arrayOf(email), null, null, null)
     }
 
+    // Get full name safely
+    fun getFullName(email: String): String {
+        val cursor = getUserByEmail(email)
+        val name = if (cursor != null && cursor.moveToFirst()) {
+            val first = cursor.getString(cursor.getColumnIndexOrThrow("firstName"))
+            val last = cursor.getString(cursor.getColumnIndexOrThrow("lastName"))
+            "$first $last"
+        } else {
+            "Guest User"
+        }
+        cursor?.close()
+        return name
+    }
+
     fun updateDailyWeight(email: String, weight: Double): Boolean {
         val db = writableDatabase
         val cv = ContentValues().apply { put("weightToday", weight) }
@@ -114,6 +146,7 @@ class DatabaseHelper(context: Context) :
     }
 
     fun updateGoals(email: String, steps: Int, calories: Int, targetWeight: Double): Boolean {
+        resetDailyProgress(email)
         val db = writableDatabase
         val cv = ContentValues().apply {
             put("daily_steps_goal", steps)
@@ -148,29 +181,7 @@ class DatabaseHelper(context: Context) :
         return result > 0
     }
 
-    fun registerGoogleUser(email: String, firstName: String, lastName: String): Boolean {
-        val db = writableDatabase
-        val cv = ContentValues().apply {
-            put("email", email)
-            put("firstName", firstName)
-            put("lastName", lastName)
-            put("age", 0)
-            put("height", 0.0)
-            put("weight", 0.0)
-            put("daily_steps_goal", 10000)
-            put("daily_calories_goal", 2000)
-            put("target_weight", 70.0)
-            put("stepsToday", 0)
-            put("caloriesToday", 0)
-            put("weightToday", 0.0)
-        }
-        val result = db.insert("users", null, cv)
-        db.close()
-        return result != -1L
-    }
-
     // ---------------- Daily Stats Functions ----------------
-
     fun saveDailyStats(email: String, date: String, steps: Int, calories: Int, weight: Double) {
         val db = writableDatabase
         val cv = ContentValues().apply {
@@ -184,52 +195,114 @@ class DatabaseHelper(context: Context) :
         db.close()
     }
 
-    fun getLast7DaysStats(email: String): List<Triple<String, Int, Int>> {
+    fun getDailyStats(email: String, date: String): Cursor? {
         val db = readableDatabase
-        val calendar = Calendar.getInstance()
-        val stats = mutableListOf<Triple<String, Int, Int>>()
-
-        for (i in 6 downTo 0) {
-            val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
-            val cursor = db.query(
-                TABLE_DAILY_STATS,
-                arrayOf("steps", "calories"),
-                "user_email = ? AND date = ?",
-                arrayOf(email, date),
-                null, null, null
-            )
-            if (cursor != null && cursor.moveToFirst()) {
-                val steps = cursor.getInt(cursor.getColumnIndexOrThrow("steps"))
-                val calories = cursor.getInt(cursor.getColumnIndexOrThrow("calories"))
-                stats.add(Triple(date, steps, calories))
-            } else {
-                stats.add(Triple(date, 0, 0))
-            }
-            cursor?.close()
-            calendar.add(Calendar.DAY_OF_YEAR, -1)
-        }
-
-        return stats.reversed()
-    }
-
-    fun getGoals(email: String): Cursor? {
-        val db = this.readableDatabase
-        // Replace "users" with your table name if different
-        return db.rawQuery(
-            "SELECT daily_steps_goal, daily_calories_goal, target_weight FROM users WHERE email = ?",
-            arrayOf(email)
+        return db.query(
+            TABLE_DAILY_STATS,
+            arrayOf("steps", "calories", "weight"),
+            "user_email=? AND date=?",
+            arrayOf(email, date),
+            null, null, null
         )
     }
 
-    fun updateGoals(email: String, steps: Int, calories: Int, targetWeight: Float): Boolean {
-        val db = this.writableDatabase
+    // ---------------- Hourly Stats Functions ----------------
+    fun saveHourlyStats(
+        email: String,
+        date: String,
+        hour: Int,
+        steps: Int,
+        calories: Int = 0,
+        weight: Double = 0.0
+    ) {
+        val db = writableDatabase
         val cv = ContentValues().apply {
-            put("daily_steps_goal", steps)
-            put("daily_calories_goal", calories)
-            put("target_weight", targetWeight)
+            put("email", email)
+            put("date", date)
+            put("hour", hour)
+            put("steps", steps)
+            put("calories", calories)
+            put("weight", weight)
         }
-        val result = db.update("users", cv, "email = ?", arrayOf(email))
-        return result > 0
+        db.insertWithOnConflict(TABLE_HOURLY_STATS, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+        db.close()
     }
 
+    fun getTodayHourlyStats(email: String): List<Pair<Int, Int>> {
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val list = mutableListOf<Pair<Int, Int>>()
+        val db = readableDatabase
+        val cursor = db.rawQuery(
+            "SELECT hour, steps FROM $TABLE_HOURLY_STATS WHERE email=? AND date=? ORDER BY hour ASC",
+            arrayOf(email, today)
+        )
+        if (cursor.moveToFirst()) {
+            do {
+                val hour = cursor.getInt(cursor.getColumnIndexOrThrow("hour"))
+                val steps = cursor.getInt(cursor.getColumnIndexOrThrow("steps"))
+                list.add(Pair(hour, steps))
+            } while (cursor.moveToNext())
+        }
+        cursor.close()
+        return list
+    }
+
+    // ---------------- Reset Daily Progress ----------------
+    fun resetDailyProgress(email: String) {
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        val cursor = getUserByEmail(email)
+        if (cursor != null && cursor.moveToFirst()) {
+            val oldSteps = cursor.getInt(cursor.getColumnIndexOrThrow("stepsToday"))
+            val oldCalories = cursor.getInt(cursor.getColumnIndexOrThrow("caloriesToday"))
+            val weightToday = cursor.getDouble(cursor.getColumnIndexOrThrow("weightToday"))
+            saveDailyStats(email, today, oldSteps, oldCalories, weightToday)
+        }
+        cursor?.close()
+
+        val db = writableDatabase
+        val cv = ContentValues().apply {
+            put("stepsToday", 0)
+            put("caloriesToday", 0)
+        }
+        db.update(TABLE_USERS, cv, "email=?", arrayOf(email))
+        db.close()
+    }
+
+    fun registerGoogleUser(email: String, firstName: String, lastName: String): Boolean {
+        if (isEmailTaken(email)) return false
+        val db = writableDatabase
+        val cv = ContentValues().apply {
+            put("email", email)
+            put("password", "") // No password for Google Sign-In
+            put("firstName", firstName)
+            put("lastName", lastName)
+            put("userType", "user")
+            put("age", 0)
+            put("gender", "")
+            put("height", 0.0)
+            put("weight", 70.0)
+            put("weightToday", 70.0)
+            put("target_weight", 70.0)
+            put("daily_steps_goal", 10000)
+            put("daily_calories_goal", 2000)
+            put("stepsToday", 0)
+            put("caloriesToday", 0)
+        }
+        val result = db.insert(TABLE_USERS, null, cv)
+        db.close()
+        return result != -1L
+    }
+
+    fun getUserDetails(email: String): Cursor? {
+        val db = readableDatabase
+        return db.query(
+            TABLE_USERS,
+            null,
+            "email = ?",
+            arrayOf(email),
+            null,
+            null,
+            null
+        )
+    }
 }

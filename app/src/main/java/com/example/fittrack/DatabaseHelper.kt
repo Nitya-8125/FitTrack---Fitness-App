@@ -273,7 +273,7 @@ class DatabaseHelper(context: Context) :
         val db = writableDatabase
         val cv = ContentValues().apply {
             put("email", email)
-            put("password", "") // No password for Google Sign-In
+            put("password", "")
             put("firstName", firstName)
             put("lastName", lastName)
             put("userType", "user")

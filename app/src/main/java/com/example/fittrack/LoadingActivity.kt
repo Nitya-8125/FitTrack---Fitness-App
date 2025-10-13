@@ -83,7 +83,7 @@ class LoadingActivity : AppCompatActivity() {
                     footerText.text = "Ready!"
                     updateCenterIcon(R.drawable.ic_dashboard)
 
-                    // ✅ Auto navigation after short delay
+                    //  Auto navigation after short delay
                     handler.postDelayed({
                         val intent = Intent(this@LoadingActivity, LoginActivity::class.java)
                         startActivity(intent)

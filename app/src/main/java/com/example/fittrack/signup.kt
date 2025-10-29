@@ -6,6 +6,8 @@ import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.snackbar.Snackbar
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 
 class SignupActivity : AppCompatActivity() {
 
@@ -17,7 +19,10 @@ class SignupActivity : AppCompatActivity() {
     private lateinit var txtLoginRedirect: TextView
 
     private lateinit var userData: MutableMap<String, String>
-    private lateinit var dbHelper: DatabaseHelper
+
+    // Firebase instances
+    private lateinit var auth: FirebaseAuth
+    private lateinit var firestore: FirebaseFirestore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,8 +34,11 @@ class SignupActivity : AppCompatActivity() {
         btnPrevious = findViewById(R.id.btnPrevious)
         txtLoginRedirect = findViewById(R.id.txtLoginRedirect)
 
-        dbHelper = DatabaseHelper(this)
         userData = mutableMapOf()
+
+        // Initialize Firebase
+        auth = FirebaseAuth.getInstance()
+        firestore = FirebaseFirestore.getInstance()
 
         showStep(currentStep)
 
@@ -51,6 +59,7 @@ class SignupActivity : AppCompatActivity() {
         val inflater = layoutInflater
         val stepView: View? = when (step) {
 
+            // Step 1: Account Info
             0 -> inflater.inflate(R.layout.layout_step_account, stepContainer, false).apply {
                 val etEmail: EditText = findViewById(R.id.inputEmail)
                 val etPassword: EditText = findViewById(R.id.inputPassword)
@@ -63,6 +72,7 @@ class SignupActivity : AppCompatActivity() {
                 btnNext.text = "Next"
             }
 
+            // Step 2: Personal Info
             1 -> inflater.inflate(R.layout.layout_step_personal, stepContainer, false).apply {
                 val etFirstName: EditText = findViewById(R.id.inputFirstName)
                 val etLastName: EditText = findViewById(R.id.inputLastName)
@@ -96,13 +106,13 @@ class SignupActivity : AppCompatActivity() {
         stepContainer.removeAllViews()
         stepView?.let { stepContainer.addView(it) }
 
-        // Update Progress
         progressBar.progress = ((step + 1) * 100 / 2)
         btnPrevious.visibility = if (step == 0) View.GONE else View.VISIBLE
 
-        // Set btnNext click listener after inflating step
         btnNext.setOnClickListener {
             when (currentStep) {
+
+                // Step 1 validation
                 0 -> {
                     val etEmail: EditText = stepView!!.findViewById(R.id.inputEmail)
                     val etPassword: EditText = stepView.findViewById(R.id.inputPassword)
@@ -137,6 +147,7 @@ class SignupActivity : AppCompatActivity() {
                     showStep(currentStep)
                 }
 
+                // Step 2 validation + Firebase Registration
                 1 -> {
                     val etFirstName: EditText = stepView!!.findViewById(R.id.inputFirstName)
                     val etLastName: EditText = stepView.findViewById(R.id.inputLastName)
@@ -186,19 +197,38 @@ class SignupActivity : AppCompatActivity() {
                     val email = userData["email"] ?: ""
                     val password = userData["password"] ?: ""
 
-                    val success = dbHelper.registerUser(
-                        email, password,
-                        firstName, lastName, age, gender,
-                        height.toDouble(), weight.toDouble()
-                    )
+                    // ✅ Create user in Firebase Authentication
+                    auth.createUserWithEmailAndPassword(email, password)
+                        .addOnCompleteListener { task ->
+                            if (task.isSuccessful) {
+                                val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
 
-                    if (success) {
-                        Snackbar.make(stepContainer, "Account Created Successfully!", Snackbar.LENGTH_LONG).show()
-                        startActivity(Intent(this@SignupActivity, LoginActivity::class.java))
-                        finish()
-                    } else {
-                        Snackbar.make(stepContainer, "Registration failed (email may exist)", Snackbar.LENGTH_LONG).show()
-                    }
+                                val userMap = hashMapOf(
+                                    "firstName" to firstName,
+                                    "lastName" to lastName,
+                                    "email" to email,
+                                    "age" to age,
+                                    "weight" to weight,
+                                    "height" to height,
+                                    "gender" to gender,
+                                    "createdAt" to System.currentTimeMillis()
+                                )
+
+                                // ✅ Store user data in Firestore
+                                firestore.collection("users").document(userId)
+                                    .set(userMap)
+                                    .addOnSuccessListener {
+                                        Snackbar.make(stepContainer, "Account Created Successfully!", Snackbar.LENGTH_LONG).show()
+                                        startActivity(Intent(this@SignupActivity, LoginActivity::class.java))
+                                        finish()
+                                    }
+                                    .addOnFailureListener {
+                                        Snackbar.make(stepContainer, "Failed to save user data: ${it.message}", Snackbar.LENGTH_LONG).show()
+                                    }
+                            } else {
+                                Snackbar.make(stepContainer, "Registration failed: ${task.exception?.message}", Snackbar.LENGTH_LONG).show()
+                            }
+                        }
                 }
             }
         }

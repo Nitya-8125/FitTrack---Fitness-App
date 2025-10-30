@@ -43,7 +43,7 @@ android {
 
 dependencies {
     // ✅ Firebase BoM – controls all Firebase versions
-    implementation(platform("com.google.firebase:firebase-bom:34.4.0"))
+    implementation(platform("com.google.firebase:firebase-bom:33.4.0"))
 
     // ✅ Firebase core services
     implementation("com.google.firebase:firebase-analytics")
@@ -55,7 +55,7 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore-ktx")
 
     // ✅ Google Sign-In (optional)
-    implementation("com.google.android.gms:play-services-auth:20.7.0")
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
 
     // ✅ Chart Library
     implementation("com.github.PhilJay:MPAndroidChart:v3.1.0")

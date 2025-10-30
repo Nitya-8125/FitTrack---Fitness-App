@@ -1,6 +1,5 @@
 package com.example.fittrack
 
-import android.database.Cursor
 import android.os.Bundle
 import android.view.MenuItem
 import android.view.View
@@ -13,13 +12,16 @@ import androidx.drawerlayout.widget.DrawerLayout
 import com.example.fittrack.ui.home.HomeFragment
 import com.example.fittrack.ui.profile.ProfileFragment
 import com.google.android.material.navigation.NavigationView
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 
 class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelectedListener {
 
     private lateinit var drawerLayout: DrawerLayout
     private lateinit var navView: NavigationView
     private lateinit var session: SessionManager
-    private lateinit var dbHelper: DatabaseHelper
+    private lateinit var auth: FirebaseAuth
+    private lateinit var firestore: FirebaseFirestore
 
     private var currentFragmentTag: String = "HOME"
 
@@ -28,7 +30,8 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         setContentView(R.layout.activity_main)
 
         session = SessionManager(this)
-        dbHelper = DatabaseHelper(this)
+        auth = FirebaseAuth.getInstance()
+        firestore = FirebaseFirestore.getInstance()
 
         val toolbar: androidx.appcompat.widget.Toolbar = findViewById(R.id.toolbar)
         setSupportActionBar(toolbar)
@@ -52,31 +55,38 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val tvUserName = footerView.findViewById<TextView>(R.id.tv_user_name)
         val tvUserType = footerView.findViewById<TextView>(R.id.tv_user_type)
         val imgProfile = footerView.findViewById<ImageView>(R.id.img_profile)
+        imgProfile.setImageResource(R.drawable.ic_profile)
 
-        val email = session.getUserEmail()
+        // ---------------- LOAD USER DATA FROM FIRESTORE ----------------
+        val currentUser = auth.currentUser
+        val email = currentUser?.email ?: session.getUserEmail()
+
         if (!email.isNullOrEmpty()) {
-            val cursor: Cursor? = dbHelper.getUserByEmail(email)
-            if (cursor != null && cursor.moveToFirst()) {
-                val firstName = cursor.getString(cursor.getColumnIndexOrThrow("firstName"))
-                val lastName = cursor.getString(cursor.getColumnIndexOrThrow("lastName"))
-                val name = "$firstName $lastName"
-                val userType = cursor.getString(cursor.getColumnIndexOrThrow("userType"))
+            firestore.collection("users").document(email)
+                .get()
+                .addOnSuccessListener { document ->
+                    if (document.exists()) {
+                        val firstName = document.getString("firstName") ?: "Guest"
+                        val lastName = document.getString("lastName") ?: "User"
+                        val userType = document.getString("userType") ?: "Fitness Member"
 
-                tvUserName.text = name
-                tvUserType.text = userType ?: "Fitness Member"
-            } else {
-                tvUserName.text = "Guest User"
-                tvUserType.text = "Welcome"
-            }
-            cursor?.close()
+                        tvUserName.text = "$firstName $lastName"
+                        tvUserType.text = userType
+                    } else {
+                        tvUserName.text = "Guest User"
+                        tvUserType.text = "Welcome"
+                    }
+                }
+                .addOnFailureListener {
+                    tvUserName.text = "Guest User"
+                    tvUserType.text = "Welcome"
+                }
         } else {
             tvUserName.text = "Guest User"
             tvUserType.text = "Welcome"
         }
 
-        imgProfile.setImageResource(R.drawable.ic_profile)
-
-        // Load Home fragment by default
+        // ---------------- LOAD DEFAULT FRAGMENT ----------------
         if (savedInstanceState == null) {
             supportFragmentManager.beginTransaction()
                 .replace(R.id.fragment_container, HomeFragment())
@@ -86,6 +96,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         }
     }
 
+    // ---------------- NAVIGATION HANDLER ----------------
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             R.id.nav_home -> {

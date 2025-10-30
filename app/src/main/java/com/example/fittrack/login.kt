@@ -2,17 +2,20 @@ package com.example.fittrack
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.util.Patterns
 import android.widget.*
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import android.util.Log
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.android.material.snackbar.Snackbar
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.firestore.FirebaseFirestore
 
 class LoginActivity : AppCompatActivity() {
 
@@ -22,9 +25,9 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var btnGoogle: Button
     private lateinit var tvSignUp: TextView
 
-    private lateinit var dbHelper: DatabaseHelper
+    private lateinit var auth: FirebaseAuth
+    private lateinit var firestore: FirebaseFirestore
     private lateinit var sessionManager: SessionManager
-
     private var googleSignInClient: GoogleSignInClient? = null
     private lateinit var googleActivityLauncher: ActivityResultLauncher<Intent>
 
@@ -38,11 +41,12 @@ class LoginActivity : AppCompatActivity() {
         btnGoogle = findViewById(R.id.btnGoogle)
         tvSignUp = findViewById(R.id.tvSignUp)
 
-        dbHelper = DatabaseHelper(this)
+        auth = FirebaseAuth.getInstance()
+        firestore = FirebaseFirestore.getInstance()
         sessionManager = SessionManager(this)
 
-        // Auto-login
-        if (sessionManager.isLoggedIn()) {
+        // Auto-login if user already signed in
+        if (sessionManager.isLoggedIn() || auth.currentUser != null) {
             startActivity(Intent(this, MainActivity::class.java))
             finish()
             return
@@ -56,6 +60,8 @@ class LoginActivity : AppCompatActivity() {
             startActivity(Intent(this, SignupActivity::class.java))
         }
     }
+
+    // ---------------- GOOGLE SIGN-IN ----------------
 
     private fun setupGoogleSignIn() {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
@@ -79,9 +85,7 @@ class LoginActivity : AppCompatActivity() {
     private fun launchGoogleSignIn() {
         googleSignInClient?.signInIntent?.let {
             googleActivityLauncher.launch(it)
-        } ?: run {
-            Toast.makeText(this, "Google Sign-In not initialized!", Toast.LENGTH_SHORT).show()
-        }
+        } ?: Toast.makeText(this, "Google Sign-In not initialized!", Toast.LENGTH_SHORT).show()
     }
 
     private fun handleGoogleSignIn(data: Intent?) {
@@ -89,32 +93,46 @@ class LoginActivity : AppCompatActivity() {
         try {
             val account = task.getResult(ApiException::class.java)
             if (account != null && !account.email.isNullOrEmpty()) {
-                val email = account.email!!
-                val fullName = account.displayName ?: ""
-                val nameParts = fullName.split(" ")
-                val firstName = nameParts.getOrNull(0) ?: ""
-                val lastName = nameParts.getOrNull(1) ?: ""
+                val credential = GoogleAuthProvider.getCredential(account.idToken, null)
+                auth.signInWithCredential(credential)
+                    .addOnSuccessListener {
+                        val email = account.email!!
+                        val fullName = account.displayName ?: ""
+                        val firstName = fullName.split(" ").getOrNull(0) ?: ""
+                        val lastName = fullName.split(" ").getOrNull(1) ?: ""
 
-                // Save user if not exists
-                if (!dbHelper.isEmailTaken(email)) {
-                    dbHelper.registerGoogleUser(email, firstName, lastName)
-                }
+                        // Add user document if not exists
+                        val userRef = firestore.collection("users").document(email)
+                        userRef.get().addOnSuccessListener { doc ->
+                            if (!doc.exists()) {
+                                val newUser = hashMapOf(
+                                    "email" to email,
+                                    "firstName" to firstName,
+                                    "lastName" to lastName,
+                                    "userType" to "user",
+                                    "age" to 0,
+                                    "gender" to "",
+                                    "height" to 0.0,
+                                    "weight" to 70.0,
+                                    "weightToday" to 70.0,
+                                    "target_weight" to 70.0,
+                                    "daily_steps_goal" to 10000,
+                                    "daily_calories_goal" to 2000,
+                                    "stepsToday" to 0,
+                                    "caloriesToday" to 0
+                                )
+                                userRef.set(newUser)
+                            }
 
-                // Load user data
-                val cursor = dbHelper.getUserByEmail(email)
-                if (cursor != null && cursor.moveToFirst()) {
-                    val age = cursor.getInt(cursor.getColumnIndexOrThrow("age"))
-                    val heightDouble = cursor.getDouble(cursor.getColumnIndexOrThrow("height"))
-                    val heightInt = heightDouble.toInt() // convert to Int
-
-                    sessionManager.saveLoginSession(firstName, lastName, email, age, heightInt)
-                }
-                cursor?.close()
-
-                startActivity(Intent(this, MainActivity::class.java))
-                finish()
-            } else {
-                Toast.makeText(this, "Google Sign-In Failed! Email not found.", Toast.LENGTH_SHORT).show()
+                            sessionManager.saveLoginSession(firstName, lastName, email, 0, 0)
+                            startActivity(Intent(this, MainActivity::class.java))
+                            finish()
+                        }
+                    }
+                    .addOnFailureListener { e ->
+                        Log.e("GoogleAuth", "Sign-in failed", e)
+                        Toast.makeText(this, "Google Sign-In Failed!", Toast.LENGTH_SHORT).show()
+                    }
             }
         } catch (e: ApiException) {
             Log.e("Google_SignIn_Error", "Sign In Failed: ${e.message}", e)
@@ -122,6 +140,7 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
+    // ---------------- EMAIL / PASSWORD LOGIN ----------------
 
     private fun validateAndLogin() {
         val email = etEmail.text.toString().trim()
@@ -130,25 +149,31 @@ class LoginActivity : AppCompatActivity() {
         if (email.isEmpty()) { etEmail.error = "Email is required"; return }
         if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) { etEmail.error = "Invalid email"; return }
         if (password.isEmpty()) { etPassword.error = "Password is required"; return }
-        if (password.length < 6) { etPassword.error = "Password must be at least 6 characters"; return }
 
-        val cursor = dbHelper.getUserByEmail(email)
-        if (cursor != null && cursor.moveToFirst()) {
-            val firstName = cursor.getString(cursor.getColumnIndexOrThrow("firstName"))
-            val lastName = cursor.getString(cursor.getColumnIndexOrThrow("lastName"))
-            val age = cursor.getInt(cursor.getColumnIndexOrThrow("age"))
-            val heightDouble = cursor.getDouble(cursor.getColumnIndexOrThrow("height")) // REAL from DB
-            val heightInt = heightDouble.toInt() // convert to Int
+        auth.signInWithEmailAndPassword(email, password)
+            .addOnSuccessListener {
+                // Fetch user info from Firestore
+                firestore.collection("users").document(email).get()
+                    .addOnSuccessListener { document ->
+                        if (document.exists()) {
+                            val firstName = document.getString("firstName") ?: ""
+                            val lastName = document.getString("lastName") ?: ""
+                            val age = (document.getLong("age") ?: 0L).toInt()
+                            val heightDouble = (document.getDouble("height") ?: 0.0)
+                            val heightInt = heightDouble.toInt()
 
-            sessionManager.saveLoginSession(firstName, lastName, email, age, heightInt)
+                            sessionManager.saveLoginSession(firstName, lastName, email, age, heightInt)
 
-            Toast.makeText(this, "Welcome $firstName $lastName!", Toast.LENGTH_LONG).show()
-            startActivity(Intent(this, MainActivity::class.java))
-            finish()
-        } else {
-            Snackbar.make(btnSignIn, "Invalid email or password", Snackbar.LENGTH_SHORT).show()
-        }
-        cursor?.close()
-
+                            Toast.makeText(this, "Welcome $firstName $lastName!", Toast.LENGTH_LONG).show()
+                            startActivity(Intent(this, MainActivity::class.java))
+                            finish()
+                        } else {
+                            Snackbar.make(btnSignIn, "User data not found!", Snackbar.LENGTH_SHORT).show()
+                        }
+                    }
+            }
+            .addOnFailureListener {
+                Snackbar.make(btnSignIn, "Invalid email or password", Snackbar.LENGTH_SHORT).show()
+            }
     }
 }

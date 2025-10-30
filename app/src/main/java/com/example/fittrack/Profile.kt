@@ -7,14 +7,16 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import androidx.fragment.app.Fragment
-import com.example.fittrack.DatabaseHelper
 import com.example.fittrack.R
 import com.example.fittrack.SessionManager
 import com.example.fittrack.LoginActivity
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 
 class ProfileFragment : Fragment() {
 
-    private lateinit var dbHelper: DatabaseHelper
+    private lateinit var firestore: FirebaseFirestore
+    private lateinit var auth: FirebaseAuth
     private lateinit var session: SessionManager
 
     private lateinit var tvName: TextView
@@ -42,11 +44,14 @@ class ProfileFragment : Fragment() {
         btnUpdateGoals = view.findViewById(R.id.btnUpdateGoals)
         btnLogout = view.findViewById(R.id.btnLogout)
 
-        dbHelper = DatabaseHelper(requireContext())
+        firestore = FirebaseFirestore.getInstance()
+        auth = FirebaseAuth.getInstance()
         session = SessionManager(requireContext())
-        email = session.getUserEmail() ?: ""
 
-        // Load user data (name, email, goals)
+        // Get current user email
+        email = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
+
+        // Load user data from Firestore
         loadUserData()
 
         // Button actions
@@ -56,22 +61,39 @@ class ProfileFragment : Fragment() {
         return view
     }
 
+    // ---------------- LOAD USER DATA ----------------
     private fun loadUserData() {
-        val cursor = dbHelper.getUserByEmail(email)
-        if (cursor != null && cursor.moveToFirst()) {
-            // Display Name and Email
-            val firstName = cursor.getString(cursor.getColumnIndexOrThrow("firstName"))
-            tvName.text = firstName
-            tvEmail.text = email
-
-            // Display Goals
-            etStepsGoal.setText(cursor.getInt(cursor.getColumnIndexOrThrow("daily_steps_goal")).toString())
-            etCaloriesGoal.setText(cursor.getInt(cursor.getColumnIndexOrThrow("daily_calories_goal")).toString())
-            etTargetWeight.setText(cursor.getDouble(cursor.getColumnIndexOrThrow("target_weight")).toString())
+        if (email.isEmpty()) {
+            Toast.makeText(requireContext(), "No user logged in", Toast.LENGTH_SHORT).show()
+            return
         }
-        cursor?.close()
+
+        firestore.collection("users").document(email)
+            .get()
+            .addOnSuccessListener { document ->
+                if (document.exists()) {
+                    val firstName = document.getString("firstName") ?: "Guest"
+                    val lastName = document.getString("lastName") ?: ""
+                    val fullName = "$firstName $lastName"
+                    val stepsGoal = (document.getLong("daily_steps_goal") ?: 10000L).toInt()
+                    val caloriesGoal = (document.getLong("daily_calories_goal") ?: 2000L).toInt()
+                    val targetWeight = (document.getDouble("target_weight") ?: 70.0)
+
+                    tvName.text = fullName
+                    tvEmail.text = email
+                    etStepsGoal.setText(stepsGoal.toString())
+                    etCaloriesGoal.setText(caloriesGoal.toString())
+                    etTargetWeight.setText(targetWeight.toString())
+                } else {
+                    Toast.makeText(requireContext(), "User data not found", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .addOnFailureListener {
+                Toast.makeText(requireContext(), "Failed to load data", Toast.LENGTH_SHORT).show()
+            }
     }
 
+    // ---------------- UPDATE USER GOALS ----------------
     private fun updateGoals() {
         val steps = etStepsGoal.text.toString().toIntOrNull()
         val calories = etCaloriesGoal.text.toString().toIntOrNull()
@@ -82,17 +104,27 @@ class ProfileFragment : Fragment() {
             return
         }
 
-        val success = dbHelper.updateGoals(email, steps, calories, targetWeight)
-        if (success) {
-            Toast.makeText(requireContext(), "Goals updated successfully!", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(requireContext(), "Failed to update goals!", Toast.LENGTH_SHORT).show()
-        }
+        val updates = mapOf(
+            "daily_steps_goal" to steps,
+            "daily_calories_goal" to calories,
+            "target_weight" to targetWeight
+        )
+
+        firestore.collection("users").document(email)
+            .update(updates)
+            .addOnSuccessListener {
+                Toast.makeText(requireContext(), "Goals updated successfully!", Toast.LENGTH_SHORT).show()
+            }
+            .addOnFailureListener {
+                Toast.makeText(requireContext(), "Failed to update goals!", Toast.LENGTH_SHORT).show()
+            }
     }
 
+    // ---------------- LOGOUT ----------------
     private fun logoutUser() {
-        session.clearSession() // Clear saved email
-        // Redirect to LoginActivity
+        auth.signOut()
+        session.clearSession()
+
         val loginIntent = Intent(requireContext(), LoginActivity::class.java)
         loginIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(loginIntent)

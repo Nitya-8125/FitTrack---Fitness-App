@@ -7,7 +7,6 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.snackbar.Snackbar
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
 
 class SignupActivity : AppCompatActivity() {
 
@@ -20,9 +19,8 @@ class SignupActivity : AppCompatActivity() {
 
     private lateinit var userData: MutableMap<String, String>
 
-    // Firebase instances
     private lateinit var auth: FirebaseAuth
-    private lateinit var firestore: FirebaseFirestore
+    private val firestoreHelper = FirestoreDatabaseHelper()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,10 +33,7 @@ class SignupActivity : AppCompatActivity() {
         txtLoginRedirect = findViewById(R.id.txtLoginRedirect)
 
         userData = mutableMapOf()
-
-        // Initialize Firebase
         auth = FirebaseAuth.getInstance()
-        firestore = FirebaseFirestore.getInstance()
 
         showStep(currentStep)
 
@@ -59,7 +54,6 @@ class SignupActivity : AppCompatActivity() {
         val inflater = layoutInflater
         val stepView: View? = when (step) {
 
-            // Step 1: Account Info
             0 -> inflater.inflate(R.layout.layout_step_account, stepContainer, false).apply {
                 val etEmail: EditText = findViewById(R.id.inputEmail)
                 val etPassword: EditText = findViewById(R.id.inputPassword)
@@ -72,7 +66,6 @@ class SignupActivity : AppCompatActivity() {
                 btnNext.text = "Next"
             }
 
-            // Step 2: Personal Info
             1 -> inflater.inflate(R.layout.layout_step_personal, stepContainer, false).apply {
                 val etFirstName: EditText = findViewById(R.id.inputFirstName)
                 val etLastName: EditText = findViewById(R.id.inputLastName)
@@ -112,7 +105,7 @@ class SignupActivity : AppCompatActivity() {
         btnNext.setOnClickListener {
             when (currentStep) {
 
-                // Step 1 validation
+                // STEP 1 VALIDATION: Account Info
                 0 -> {
                     val etEmail: EditText = stepView!!.findViewById(R.id.inputEmail)
                     val etPassword: EditText = stepView.findViewById(R.id.inputPassword)
@@ -147,7 +140,7 @@ class SignupActivity : AppCompatActivity() {
                     showStep(currentStep)
                 }
 
-                // Step 2 validation + Firebase Registration
+                // STEP 2 VALIDATION + FIREBASE REGISTRATION
                 1 -> {
                     val etFirstName: EditText = stepView!!.findViewById(R.id.inputFirstName)
                     val etLastName: EditText = stepView.findViewById(R.id.inputLastName)
@@ -164,29 +157,30 @@ class SignupActivity : AppCompatActivity() {
                     val gender = spinnerGender.selectedItem.toString()
 
                     if (firstName.isEmpty() || lastName.isEmpty() || ageStr.isEmpty() ||
-                        weightStr.isEmpty() || heightStr.isEmpty() || gender.isEmpty()
+                        weightStr.isEmpty() || heightStr.isEmpty()
                     ) {
                         Snackbar.make(stepContainer, "All fields are required", Snackbar.LENGTH_SHORT).show()
                         return@setOnClickListener
                     }
 
                     val age = ageStr.toIntOrNull()
-                    val weight = weightStr.toFloatOrNull()
-                    val height = heightStr.toFloatOrNull()
+                    val weight = weightStr.toDoubleOrNull()
+                    val height = heightStr.toDoubleOrNull()
 
                     if (age == null || age < 13 || age > 120) {
-                        etAge.error = "Enter valid age (13–120)"
+                        etAge.error = "Invalid age"
                         return@setOnClickListener
                     }
                     if (weight == null || weight <= 0) {
-                        etWeight.error = "Enter valid weight"
+                        etWeight.error = "Invalid weight"
                         return@setOnClickListener
                     }
                     if (height == null || height <= 0) {
-                        etHeight.error = "Enter valid height"
+                        etHeight.error = "Invalid height"
                         return@setOnClickListener
                     }
 
+                    // Save to map
                     userData["firstName"] = firstName
                     userData["lastName"] = lastName
                     userData["age"] = age.toString()
@@ -194,39 +188,36 @@ class SignupActivity : AppCompatActivity() {
                     userData["height"] = height.toString()
                     userData["gender"] = gender
 
-                    val email = userData["email"] ?: ""
-                    val password = userData["password"] ?: ""
+                    val email = userData["email"]!!
+                    val password = userData["password"]!!
 
-                    // ✅ Create user in Firebase Authentication
+                    // 🔥 Create Firebase Authentication account
                     auth.createUserWithEmailAndPassword(email, password)
                         .addOnCompleteListener { task ->
-                            if (task.isSuccessful) {
-                                val userId = auth.currentUser?.uid ?: return@addOnCompleteListener
-
-                                val userMap = hashMapOf(
-                                    "firstName" to firstName,
-                                    "lastName" to lastName,
-                                    "email" to email,
-                                    "age" to age,
-                                    "weight" to weight,
-                                    "height" to height,
-                                    "gender" to gender,
-                                    "createdAt" to System.currentTimeMillis()
-                                )
-
-                                // ✅ Store user data in Firestore
-                                firestore.collection("users").document(userId)
-                                    .set(userMap)
-                                    .addOnSuccessListener {
-                                        Snackbar.make(stepContainer, "Account Created Successfully!", Snackbar.LENGTH_LONG).show()
-                                        startActivity(Intent(this@SignupActivity, LoginActivity::class.java))
-                                        finish()
-                                    }
-                                    .addOnFailureListener {
-                                        Snackbar.make(stepContainer, "Failed to save user data: ${it.message}", Snackbar.LENGTH_LONG).show()
-                                    }
-                            } else {
+                            if (!task.isSuccessful) {
                                 Snackbar.make(stepContainer, "Registration failed: ${task.exception?.message}", Snackbar.LENGTH_LONG).show()
+                                return@addOnCompleteListener
+                            }
+
+                            // 🔥 Save Full Profile into Firestore using Helper
+                            firestoreHelper.registerUser(
+                                email = email,
+                                password = password,
+                                firstName = firstName,
+                                lastName = lastName,
+                                age = age,
+                                gender = gender,
+                                height = height,
+                                weight = weight
+                            ) { success ->
+
+                                if (success) {
+                                    Snackbar.make(stepContainer, "Account Created Successfully!", Snackbar.LENGTH_LONG).show()
+                                    startActivity(Intent(this@SignupActivity, LoginActivity::class.java))
+                                    finish()
+                                } else {
+                                    Snackbar.make(stepContainer, "Failed to save data!", Snackbar.LENGTH_LONG).show()
+                                }
                             }
                         }
                 }

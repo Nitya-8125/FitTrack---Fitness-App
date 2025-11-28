@@ -12,7 +12,12 @@
           "package_name": "com.example.fittrack"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "478189604499-9ef5c6tipnls4cvdueduf6cbeo9tuc6c.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyD_zMvJei0QdmfAfwpO4rfUVkxccEZQG0Q"
@@ -20,7 +25,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "478189604499-9ef5c6tipnls4cvdueduf6cbeo9tuc6c.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

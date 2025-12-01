@@ -25,6 +25,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
 import java.util.*
+import com.example.fittrack.FirestoreDatabaseHelper
 
 class HomeFragment : Fragment(), SensorEventListener {
 
@@ -32,24 +33,24 @@ class HomeFragment : Fragment(), SensorEventListener {
     private lateinit var auth: FirebaseAuth
     private lateinit var session: SessionManager
 
-    private lateinit var tvGreeting: TextView
-    private lateinit var tvDate: TextView
-    private lateinit var tvCurrentSteps: TextView
-    private lateinit var tvSteps: TextView
-    private lateinit var tvCalories: TextView
-    private lateinit var tvWeight: TextView
-    private lateinit var progressBar: ProgressBar
-    private lateinit var progressCalories: ProgressBar
-    private lateinit var chartDaily: LineChart
+    private var tvGreeting: TextView? = null
+    private var tvDate: TextView? = null
+    private var tvCurrentSteps: TextView? = null
+    private var tvSteps: TextView? = null
+    private var tvCalories: TextView? = null
+    private var tvWeight: TextView? = null
+    private var progressBar: ProgressBar? = null
+    private var progressCalories: ProgressBar? = null
+    private var chartDaily: LineChart? = null
 
-    private lateinit var sensorManager: SensorManager
+    private var sensorManager: SensorManager? = null
     private var stepSensor: Sensor? = null
     private var totalSteps: Float = 0f
     private var userWeight: Double = 70.0
     private var email: String = ""
-    private lateinit var prefs: android.content.SharedPreferences
+    private var prefs: android.content.SharedPreferences? = null
     private val handler = Handler(Looper.getMainLooper())
-    private lateinit var timeUpdater: Runnable
+    private var timeUpdater: Runnable? = null
     private var goalCompleted = false
 
     private var stepsGoal = 10000
@@ -63,8 +64,13 @@ class HomeFragment : Fragment(), SensorEventListener {
 
         firestore = FirebaseFirestore.getInstance()
         auth = FirebaseAuth.getInstance()
-        session = SessionManager(requireContext())
-        prefs = requireContext().getSharedPreferences("step_prefs", Context.MODE_PRIVATE)
+
+        // Use context-safe initialization for session/prefs/sensors
+        context?.let { ctx ->
+            session = SessionManager(ctx)
+            prefs = ctx.getSharedPreferences("step_prefs", Context.MODE_PRIVATE)
+            sensorManager = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        }
 
         tvGreeting = view.findViewById(R.id.tvGreeting)
         tvDate = view.findViewById(R.id.tvDate)
@@ -76,17 +82,21 @@ class HomeFragment : Fragment(), SensorEventListener {
         progressCalories = view.findViewById(R.id.progressCalories)
         chartDaily = view.findViewById(R.id.chartWeekly)
 
+        // Use email from Firebase if available, else from SessionManager (safe)
         email = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
+
         if (email.isEmpty()) {
-            Toast.makeText(requireContext(), "User not logged in!", Toast.LENGTH_SHORT).show()
+            // Use safe context and isAdded check
+            if (isAdded) {
+                context?.let { ctx -> Toast.makeText(ctx, "User not logged in!", Toast.LENGTH_SHORT).show() }
+            }
         } else {
             loadUserData()
         }
 
-        // Initialize sensor
-        sensorManager = requireContext().getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
-        stepSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+        // Initialize sensor safely
+        stepSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        stepSensor?.let { sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
 
         startDateTimeUpdater()
         return view
@@ -94,47 +104,62 @@ class HomeFragment : Fragment(), SensorEventListener {
 
     // ---------------- LOAD USER DATA ----------------
     private fun loadUserData() {
-        firestore.collection("users").document(email)
-            .get()
-            .addOnSuccessListener { doc ->
-                if (doc.exists()) {
-                    val firstName = doc.getString("firstName") ?: "User"
-                    val targetWeight = doc.getDouble("target_weight") ?: 70.0
-                    userWeight = doc.getDouble("weightToday") ?: 70.0
-                    stepsGoal = (doc.getLong("daily_steps_goal") ?: 10000L).toInt()
-                    caloriesGoal = (doc.getLong("daily_calories_goal") ?: 2000L).toInt()
+        if (email.isEmpty() || !isAdded) return
 
-                    tvGreeting.text = "Welcome, $firstName!"
-                    tvSteps.text = "Goal: $stepsGoal"
-                    tvWeight.text = "Weight Today: $userWeight kg (Target: $targetWeight kg)"
+        val helper = FirestoreDatabaseHelper()
+        helper.getUserDetails(email) { data ->
+            // Ensure fragment still attached
+            if (!isAdded) return@getUserDetails
 
-                    progressBar.max = stepsGoal
-                    progressCalories.max = caloriesGoal
+            try {
+                if (data != null) {
+                    val firstName = (data["firstName"] as? String) ?: "User"
+                    val targetWeight = (data["target_weight"] as? Double) ?: 70.0
+                    userWeight = (data["weightToday"] as? Double) ?: (data["weight"] as? Double) ?: 70.0
+                    stepsGoal = ((data["daily_steps_goal"] as? Number)?.toInt() ?: 10000)
+                    caloriesGoal = ((data["daily_calories_goal"] as? Number)?.toInt() ?: 2000)
 
+                    // Update UI safely
+                    tvGreeting?.text = "Welcome, $firstName!"
+                    tvSteps?.text = "Goal: $stepsGoal"
+                    tvWeight?.text = "Weight Today: $userWeight kg (Target: $targetWeight kg)"
+
+                    progressBar?.max = stepsGoal
+                    progressCalories?.max = caloriesGoal
+
+                    // load other data
                     loadDailyStats()
                     loadDailyChart()
                 } else {
-                    Toast.makeText(requireContext(), "User data not found", Toast.LENGTH_SHORT).show()
+                    // no data found
+                    if (isAdded) context?.let { ctx -> Toast.makeText(ctx, "User data not found", Toast.LENGTH_SHORT).show() }
                 }
+            } catch (ex: Exception) {
+                if (isAdded) context?.let { ctx -> Toast.makeText(ctx, "Error parsing user data", Toast.LENGTH_SHORT).show() }
             }
-            .addOnFailureListener {
-                Toast.makeText(requireContext(), "Failed to load user data", Toast.LENGTH_SHORT).show()
-            }
+        }
     }
 
     // ---------------- LOAD DAILY STATS ----------------
     private fun loadDailyStats() {
+        if (email.isEmpty() || !isAdded) return
+
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
         firestore.collection("daily_stats").document("${email}_$today")
             .get()
             .addOnSuccessListener { doc ->
-                val stepsToday = (doc.getLong("steps") ?: 0L).toInt()
-                val caloriesToday = (doc.getLong("calories") ?: 0L).toInt()
+                if (!isAdded) return@addOnSuccessListener
+                try {
+                    val stepsToday = (doc.getLong("steps") ?: 0L).toInt()
+                    val caloriesToday = (doc.getLong("calories") ?: 0L).toInt()
 
-                tvCalories.text = "$caloriesToday / $caloriesGoal"
-                tvCurrentSteps.text = stepsToday.toString()
-                progressBar.progress = stepsToday
-                progressCalories.progress = caloriesToday
+                    tvCalories?.text = "$caloriesToday / $caloriesGoal"
+                    tvCurrentSteps?.text = stepsToday.toString()
+                    progressBar?.progress = stepsToday
+                    progressCalories?.progress = caloriesToday
+                } catch (ex: Exception) {
+                    // ignore UI update if fragment not ready
+                }
             }
     }
 
@@ -144,12 +169,12 @@ class HomeFragment : Fragment(), SensorEventListener {
 
         if (event.sensor.type == Sensor.TYPE_STEP_COUNTER) {
             val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-            var initialSteps = prefs.getFloat("initial_steps", -1f)
-            val savedDate = prefs.getString("last_date", today)
+            var initialSteps = prefs?.getFloat("initial_steps", -1f) ?: -1f
+            val savedDate = prefs?.getString("last_date", today) ?: today
 
             if (savedDate != today || initialSteps < 0) {
                 initialSteps = event.values[0]
-                prefs.edit().putFloat("initial_steps", initialSteps).putString("last_date", today).apply()
+                prefs?.edit()?.putFloat("initial_steps", initialSteps)?.putString("last_date", today)?.apply()
             }
 
             totalSteps = event.values[0] - initialSteps
@@ -157,19 +182,21 @@ class HomeFragment : Fragment(), SensorEventListener {
             if (userWeight <= 0) userWeight = 70.0
             val calories = calculateCalories(stepsInt, userWeight)
 
-            tvCurrentSteps.text = stepsInt.toString()
-            tvCalories.text = "$calories / $caloriesGoal"
+            // Update UI only if added
+            if (isAdded) {
+                tvCurrentSteps?.text = stepsInt.toString()
+                tvCalories?.text = "$calories / $caloriesGoal"
+                progressBar?.progress = stepsInt
+                progressCalories?.progress = calories
+                updateChart()
+            }
 
-            // Save to Firestore
+            // Save to Firestore (safe, async)
             saveStatsToFirestore(today, stepsInt, calories, userWeight)
 
-            progressBar.progress = stepsInt
-            progressCalories.progress = calories
-            updateChart()
-
-            if (stepsInt >= progressBar.max) {
+            if (stepsInt >= (progressBar?.max ?: stepsGoal)) {
                 goalCompleted = true
-                sensorManager.unregisterListener(this)
+                sensorManager?.unregisterListener(this)
                 showGoalCompletedDialog()
             }
         }
@@ -193,6 +220,7 @@ class HomeFragment : Fragment(), SensorEventListener {
             "weight" to weight
         )
 
+        // Fire-and-forget: no UI changes here
         firestore.collection("daily_stats").document("${email}_$date").set(dailyData)
         firestore.collection("hourly_stats").document("${email}_${date}_$hour").set(hourlyData)
     }
@@ -206,12 +234,15 @@ class HomeFragment : Fragment(), SensorEventListener {
 
     // ---------------- CHART HANDLING ----------------
     private fun loadDailyChart() {
+        if (!isAdded || email.isEmpty()) return
+
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
         firestore.collection("hourly_stats")
             .whereEqualTo("email", email)
             .whereEqualTo("date", today)
             .get()
             .addOnSuccessListener { snapshot ->
+                if (!isAdded) return@addOnSuccessListener
                 val entries = mutableListOf<Entry>()
                 val hourlyMap = mutableMapOf<Int, Int>()
                 for (h in 0..23) hourlyMap[h] = 0
@@ -232,53 +263,65 @@ class HomeFragment : Fragment(), SensorEventListener {
     }
 
     private fun drawChart(entries: List<Entry>) {
-        val dataSet = LineDataSet(entries, "Steps Today")
-        dataSet.color = resources.getColor(R.color.blue_700, requireContext().theme)
-        dataSet.valueTextColor = resources.getColor(R.color.black, requireContext().theme)
-        dataSet.lineWidth = 2f
-        dataSet.circleRadius = 4f
-        dataSet.setDrawFilled(true)
-        dataSet.fillAlpha = 50
+        if (!isAdded) return
+        try {
+            val dataSet = LineDataSet(entries, "Steps Today")
+            // Use safe context access
+            val ctx = context
+            if (ctx == null) return
 
-        chartDaily.data = LineData(dataSet)
-        chartDaily.description.isEnabled = false
-        chartDaily.axisRight.isEnabled = false
-        chartDaily.xAxis.position = XAxis.XAxisPosition.BOTTOM
-        chartDaily.xAxis.granularity = 1f
-        chartDaily.xAxis.labelCount = 24
-        chartDaily.invalidate()
+            dataSet.color = resources.getColor(R.color.blue_700, ctx.theme)
+            dataSet.valueTextColor = resources.getColor(R.color.black, ctx.theme)
+            dataSet.lineWidth = 2f
+            dataSet.circleRadius = 4f
+            dataSet.setDrawFilled(true)
+            dataSet.fillAlpha = 50
+
+            chartDaily?.data = LineData(dataSet)
+            chartDaily?.description?.isEnabled = false
+            chartDaily?.axisRight?.isEnabled = false
+            chartDaily?.xAxis?.position = XAxis.XAxisPosition.BOTTOM
+            chartDaily?.xAxis?.granularity = 1f
+            chartDaily?.xAxis?.labelCount = 24
+            chartDaily?.invalidate()
+        } catch (ex: Exception) {
+            // ignore UI drawing errors if fragment not ready
+        }
     }
 
     // ---------------- DATE & GOAL HANDLING ----------------
     private fun startDateTimeUpdater() {
         timeUpdater = object : Runnable {
             override fun run() {
+                if (!isAdded) return
                 updateDateTime()
                 handler.postDelayed(this, 60000)
             }
         }
-        handler.post(timeUpdater)
+        handler.post(timeUpdater!!)
     }
 
     private fun updateDateTime() {
+        if (!isAdded) return
         val currentDate = Calendar.getInstance().time
         val sdf = SimpleDateFormat("EEEE, MMM dd • hh:mm a", Locale.getDefault())
-        tvDate.text = sdf.format(currentDate)
+        tvDate?.text = sdf.format(currentDate)
     }
 
     private fun showGoalCompletedDialog() {
         if (!isAdded) return
 
-        val builder = android.app.AlertDialog.Builder(requireContext())
+        val ctx = context ?: return
+        val builder = android.app.AlertDialog.Builder(ctx)
         builder.setTitle("Congratulations!")
         builder.setMessage("You completed your steps goal 🎉")
         builder.setCancelable(false)
         builder.setPositiveButton("Set New Target") { dialog, _ ->
             val profileFragment = ProfileFragment()
-            requireActivity().supportFragmentManager.beginTransaction()
-                .replace(R.id.fragment_container, profileFragment)
-                .addToBackStack(null)
-                .commit()
+            activity?.supportFragmentManager?.beginTransaction()
+                ?.replace(R.id.fragment_container, profileFragment)
+                ?.addToBackStack(null)
+                ?.commit()
             dialog.dismiss()
         }
         builder.show()
@@ -288,14 +331,14 @@ class HomeFragment : Fragment(), SensorEventListener {
     override fun onResume() {
         super.onResume()
         if (!goalCompleted) {
-            stepSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+            stepSensor?.let { sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
         }
     }
 
     override fun onPause() {
         super.onPause()
-        sensorManager.unregisterListener(this)
-        handler.removeCallbacks(timeUpdater)
+        sensorManager?.unregisterListener(this)
+        timeUpdater?.let { handler.removeCallbacks(it) }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}

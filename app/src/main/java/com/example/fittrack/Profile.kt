@@ -12,6 +12,7 @@ import com.example.fittrack.SessionManager
 import com.example.fittrack.LoginActivity
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.example.fittrack.FirestoreDatabaseHelper
 
 class ProfileFragment : Fragment() {
 
@@ -64,33 +65,31 @@ class ProfileFragment : Fragment() {
     // ---------------- LOAD USER DATA ----------------
     private fun loadUserData() {
         if (email.isEmpty()) {
-            Toast.makeText(requireContext(), "No user logged in", Toast.LENGTH_SHORT).show()
+            if (isAdded) Toast.makeText(context, "No user logged in", Toast.LENGTH_SHORT).show()
             return
         }
 
-        firestore.collection("users").document(email)
-            .get()
-            .addOnSuccessListener { document ->
-                if (document.exists()) {
-                    val firstName = document.getString("firstName") ?: "Guest"
-                    val lastName = document.getString("lastName") ?: ""
-                    val fullName = "$firstName $lastName"
-                    val stepsGoal = (document.getLong("daily_steps_goal") ?: 10000L).toInt()
-                    val caloriesGoal = (document.getLong("daily_calories_goal") ?: 2000L).toInt()
-                    val targetWeight = (document.getDouble("target_weight") ?: 70.0)
+        val helper = FirestoreDatabaseHelper()
+        helper.getUserDetails(email) { data ->
+            if (!isAdded) return@getUserDetails
 
-                    tvName.text = fullName
-                    tvEmail.text = email
-                    etStepsGoal.setText(stepsGoal.toString())
-                    etCaloriesGoal.setText(caloriesGoal.toString())
-                    etTargetWeight.setText(targetWeight.toString())
-                } else {
-                    Toast.makeText(requireContext(), "User data not found", Toast.LENGTH_SHORT).show()
-                }
+            if (data != null) {
+                val firstName = (data["firstName"] as? String) ?: "Guest"
+                val lastName = (data["lastName"] as? String) ?: ""
+                val fullName = "$firstName $lastName"
+                val stepsGoal = ((data["daily_steps_goal"] as? Number)?.toInt() ?: 10000)
+                val caloriesGoal = ((data["daily_calories_goal"] as? Number)?.toInt() ?: 2000)
+                val targetWeight = (data["target_weight"] as? Double) ?: (data["weightToday"] as? Double) ?: 70.0
+
+                tvName.text = fullName
+                tvEmail.text = email
+                etStepsGoal.setText(stepsGoal.toString())
+                etCaloriesGoal.setText(caloriesGoal.toString())
+                etTargetWeight.setText(targetWeight.toString())
+            } else {
+                if (isAdded) Toast.makeText(context, "User data not found", Toast.LENGTH_SHORT).show()
             }
-            .addOnFailureListener {
-                Toast.makeText(requireContext(), "Failed to load data", Toast.LENGTH_SHORT).show()
-            }
+        }
     }
 
     // ---------------- UPDATE USER GOALS ----------------

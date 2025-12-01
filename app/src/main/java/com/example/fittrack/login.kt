@@ -4,197 +4,208 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.util.Patterns
-import android.widget.*
+import android.widget.Button
+import android.widget.EditText
+import android.widget.TextView
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.android.material.snackbar.Snackbar
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.firestore.FirebaseFirestore
 
 class LoginActivity : AppCompatActivity() {
+
+    private lateinit var auth: FirebaseAuth
+    private var googleSignInClient: GoogleSignInClient? = null
+    private lateinit var googleActivityLauncher: ActivityResultLauncher<Intent>
 
     private lateinit var etEmail: EditText
     private lateinit var etPassword: EditText
     private lateinit var btnSignIn: Button
     private lateinit var btnGoogle: Button
-    private lateinit var tvSignUp: TextView
+    private lateinit var tvSignUp: TextView   // signup link
 
-    private lateinit var auth: FirebaseAuth
-    private lateinit var sessionManager: SessionManager
-    private val firestoreHelper = FirestoreDatabaseHelper()
-
-    private var googleSignInClient: GoogleSignInClient? = null
-    private lateinit var googleActivityLauncher: ActivityResultLauncher<Intent>
+    // Firestore instance
+    private val firestore = FirebaseFirestore.getInstance()
 
     companion object {
-        private const val TAG = "GoogleSignInDebug"
+        private const val TAG = "LoginActivity"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_login)
 
+        auth = FirebaseAuth.getInstance()
+
+        // Wire UI (IDs from your activity_login.xml)
         etEmail = findViewById(R.id.etEmail)
         etPassword = findViewById(R.id.etPassword)
         btnSignIn = findViewById(R.id.btnSignIn)
         btnGoogle = findViewById(R.id.btnGoogle)
-        tvSignUp = findViewById(R.id.tvSignUp)
+        tvSignUp = findViewById(R.id.tvSignUp)    // <-- bind signup textview
 
-        auth = FirebaseAuth.getInstance()
-        sessionManager = SessionManager(this)
-
-        // Auto-login if Firebase already has user
-        if (auth.currentUser != null) {
-            startActivity(Intent(this, MainActivity::class.java))
-            finish()
-            return
+        // Set signup click listener to open SignupActivity
+        tvSignUp.setOnClickListener {
+            try {
+                startActivity(Intent(this@LoginActivity, SignupActivity::class.java))
+            } catch (ex: Exception) {
+                Log.e(TAG, "Failed to launch SignupActivity: ${ex.message}", ex)
+                Snackbar.make(etEmail, "Unable to open signup screen", Snackbar.LENGTH_LONG).show()
+            }
         }
 
         setupGoogleSignIn()
 
-        btnSignIn.setOnClickListener { validateAndLogin() }
-        btnGoogle.setOnClickListener { launchGoogleSignIn() }
-        tvSignUp.setOnClickListener {
-            startActivity(Intent(this, SignupActivity::class.java))
+        btnGoogle.setOnClickListener {
+            googleSignInClient?.signInIntent?.let { intent ->
+                googleActivityLauncher.launch(intent)
+            } ?: run {
+                Snackbar.make(etEmail, "Google Sign-In not configured", Snackbar.LENGTH_LONG).show()
+                Log.w(TAG, "googleSignInClient is null")
+            }
+        }
+
+        btnSignIn.setOnClickListener {
+            val email = etEmail.text.toString().trim()
+            val pass = etPassword.text.toString()
+
+            if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+                etEmail.error = "Invalid Email"
+                return@setOnClickListener
+            }
+            if (pass.isEmpty()) {
+                etPassword.error = "Enter password"
+                return@setOnClickListener
+            }
+
+            // Email/password sign-in
+            auth.signInWithEmailAndPassword(email, pass)
+                .addOnCompleteListener { task ->
+                    if (task.isSuccessful) {
+                        // Signed in — now check for profile in Firestore
+                        val user = auth.currentUser
+                        if (user == null) {
+                            // Unexpected — but handle safely
+                            Snackbar.make(etEmail, "Login succeeded but user is null", Snackbar.LENGTH_LONG).show()
+                            return@addOnCompleteListener
+                        }
+                        handlePostSignIn(user.uid)
+                    } else {
+                        Snackbar.make(etEmail, "Login failed: ${task.exception?.message}", Snackbar.LENGTH_LONG).show()
+                        Log.w(TAG, "Email sign-in failed", task.exception)
+                    }
+                }
         }
     }
 
-    // ---------------- GOOGLE SIGN-IN ----------------
-
+    /** ---------------- GOOGLE SIGN IN SETUP ---------------- */
     private fun setupGoogleSignIn() {
-        val webClientId = getString(R.string.google_sign_id)
+        val webClientId = try {
+            getString(R.string.default_web_client_id)
+        } catch (e: Exception) {
+            ""
+        }
+
         Log.d(TAG, "Using Web Client ID: $webClientId")
 
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(webClientId)         // must be Web client id
+        val gsoBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
-            .build()
 
+        if (webClientId.isNotEmpty()) gsoBuilder.requestIdToken(webClientId)
+        else Log.w(TAG, "default_web_client_id missing — Google token may be null")
+
+        val gso = gsoBuilder.build()
         googleSignInClient = GoogleSignIn.getClient(this, gso)
 
         googleActivityLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
-            Log.d(TAG, "Google launcher resultCode=${result.resultCode}, data=${result.data}")
-            if (result.resultCode == RESULT_OK) {
-                handleGoogleSignIn(result.data)
-            } else {
-                // show code so you know why cancelled (resultCode may be 0)
-                Toast.makeText(this, "Google Sign-In Cancelled! resultCode=${result.resultCode}", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
+            Log.d(TAG, "Google result code = ${result.resultCode}")
 
-    private fun launchGoogleSignIn() {
-        googleSignInClient?.signInIntent?.let {
-            googleActivityLauncher.launch(it)
-        } ?: Toast.makeText(this, "Google Sign-In not initialized!", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun handleGoogleSignIn(data: Intent?) {
-        // Log intent extras if any
-        Log.d(TAG, "handleGoogleSignIn: intentData=$data")
-        data?.extras?.keySet()?.forEach { key ->
-            Log.d(TAG, "Intent extra: $key = ${data.extras?.get(key)}")
-        }
-
-        val task = GoogleSignIn.getSignedInAccountFromIntent(data)
-        try {
-            val account = task.getResult(ApiException::class.java)
-            Log.d(TAG, "Google account retrieved: id=${account?.id}, email=${account?.email}")
-
-            val idToken = account?.idToken
-            if (idToken == null) {
-                Log.e(TAG, "idToken is null — check that strings.xml uses WEB client id and OAuth client exists")
-                Toast.makeText(this, "Google Sign-In failed: idToken missing (check Web client id)", Toast.LENGTH_LONG).show()
-                return
+            if (result.resultCode == RESULT_CANCELED) {
+                Snackbar.make(etEmail, "Google Sign-In Cancelled!", Snackbar.LENGTH_LONG).show()
+                return@registerForActivityResult
             }
 
-            val credential = GoogleAuthProvider.getCredential(idToken, null)
-            auth.signInWithCredential(credential)
-                .addOnSuccessListener {
-                    Log.d(TAG, "Firebase signInWithCredential success: uid=${auth.currentUser?.uid}")
+            val data = result.data
+            val task = GoogleSignIn.getSignedInAccountFromIntent(data)
 
-                    val email = account.email ?: ""
-                    val fullName = account.displayName ?: ""
-                    val firstName = fullName.split(" ").getOrNull(0) ?: ""
-                    val lastName = fullName.split(" ").getOrNull(1) ?: ""
+            try {
+                val account: GoogleSignInAccount? = task.getResult(ApiException::class.java)
+                val idToken = account?.idToken
+                if (idToken == null) {
+                    Snackbar.make(etEmail, "Google Token is NULL! Check Web Client ID", Snackbar.LENGTH_LONG).show()
+                    return@registerForActivityResult
+                }
 
-                    // Save new Google users in Firestore using helper (helper uses UID when available)
-                    firestoreHelper.registerUser(
-                        email = email,
-                        password = "",       // not used for Google accounts
-                        firstName = firstName,
-                        lastName = lastName,
-                        age = 0,
-                        gender = "",
-                        height = 0.0,
-                        weight = 70.0
-                    ) { success ->
-                        Log.d(TAG, "firestoreHelper.registerUser success=$success")
+                // Exchange token with Firebase
+                val credential = GoogleAuthProvider.getCredential(idToken, null)
+                auth.signInWithCredential(credential)
+                    .addOnCompleteListener { firebaseTask ->
+                        if (firebaseTask.isSuccessful) {
+                            val user = auth.currentUser
+                            if (user != null) handlePostSignIn(user.uid)
+                            else {
+                                Snackbar.make(etEmail, "Google login succeeded but user null", Snackbar.LENGTH_LONG).show()
+                            }
+                        } else {
+                            Snackbar.make(etEmail, "Firebase auth failed: ${firebaseTask.exception?.message}", Snackbar.LENGTH_LONG).show()
+                            Log.w(TAG, "Firebase credential sign-in failed", firebaseTask.exception)
+                        }
                     }
 
-                    sessionManager.saveLoginSession(firstName, lastName, email, 0, 0)
-                    startActivity(Intent(this, MainActivity::class.java))
+            } catch (e: ApiException) {
+                Snackbar.make(etEmail, "Google Sign-In Error: ${e.message}", Snackbar.LENGTH_LONG).show()
+                Log.w(TAG, "GoogleSignIn ApiException: code=${e.statusCode} msg=${e.message}")
+            } catch (e: Exception) {
+                Snackbar.make(etEmail, "Google Sign-In unexpected error: ${e.message}", Snackbar.LENGTH_LONG).show()
+                Log.e(TAG, "GoogleSignIn unexpected", e)
+            }
+        }
+    }
+
+    /**
+     * After FirebaseAuth sign-in, check whether user's profile exists in Firestore.
+     * We expect profile to be at collection "users" with document id = uid.
+     * - If exists -> go to MainActivity
+     * - If missing -> go to SignupActivity (or Profile creation)
+     */
+    private fun handlePostSignIn(uid: String) {
+        try {
+            val usersColl = firestore.collection("users")
+            val docRef = usersColl.document(uid)
+            docRef.get()
+                .addOnSuccessListener { snapshot ->
+                    if (snapshot != null && snapshot.exists()) {
+                        Log.d(TAG, "User profile found for uid=$uid")
+                        startActivity(Intent(this@LoginActivity, MainActivity::class.java))
+                        finish()
+                    } else {
+                        Log.d(TAG, "User profile NOT found for uid=$uid -> redirecting to Signup/Profile creation")
+                        val i = Intent(this@LoginActivity, SignupActivity::class.java)
+                        auth.currentUser?.email?.let { i.putExtra("email_from_login", it) }
+                        i.putExtra("uid_from_login", uid)
+                        startActivity(i)
+                        finish()
+                    }
+                }
+                .addOnFailureListener { ex ->
+                    Log.e(TAG, "Failed to read user profile for uid=$uid: ${ex.message}", ex)
+                    Snackbar.make(etEmail, "Failed to verify profile: ${ex.message}", Snackbar.LENGTH_LONG).show()
+                    startActivity(Intent(this@LoginActivity, MainActivity::class.java))
                     finish()
                 }
-                .addOnFailureListener { e ->
-                    Log.e(TAG, "Firebase signInWithCredential failed: ${e.message}", e)
-                    Toast.makeText(this, "Firebase auth failed: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-
-        } catch (e: ApiException) {
-            Log.e(TAG, "Google Sign-In ApiException: statusCode=${e.statusCode}, message=${e.message}", e)
-            Toast.makeText(this, "Google Sign-In failed (code=${e.statusCode})", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Log.e(TAG, "Unexpected Google Sign-In error: ${e.message}", e)
-            Toast.makeText(this, "Google Sign-In unexpected error", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    // ---------------- EMAIL / PASSWORD LOGIN ----------------
-
-    private fun validateAndLogin() {
-        val email = etEmail.text.toString().trim()
-        val password = etPassword.text.toString().trim()
-
-        if (email.isEmpty()) { etEmail.error = "Email is required"; return }
-        if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-            etEmail.error = "Invalid email"; return
-        }
-        if (password.isEmpty()) { etPassword.error = "Password is required"; return }
-
-        auth.signInWithEmailAndPassword(email, password)
-            .addOnSuccessListener {
-                loadUserFromFirestore(email)
-            }
-            .addOnFailureListener {
-                Snackbar.make(btnSignIn, "Invalid email or password", Snackbar.LENGTH_SHORT).show()
-            }
-    }
-
-    // Loads user details using FirestoreDatabaseHelper
-    private fun loadUserFromFirestore(email: String) {
-        firestoreHelper.getUserDetails(email) { data ->
-            if (data == null) {
-                Snackbar.make(btnSignIn, "User data not found!", Snackbar.LENGTH_SHORT).show()
-                return@getUserDetails
-            }
-
-            val firstName = data["firstName"]?.toString() ?: ""
-            val lastName = data["lastName"]?.toString() ?: ""
-            val age = (data["age"] as? Long)?.toInt() ?: 0
-            val height = ((data["height"] as? Double) ?: 0.0).toInt()
-
-            sessionManager.saveLoginSession(firstName, lastName, email, age, height)
-
-            Toast.makeText(this, "Welcome $firstName $lastName!", Toast.LENGTH_LONG).show()
-            startActivity(Intent(this, MainActivity::class.java))
+        } catch (ex: Exception) {
+            Log.e(TAG, "handlePostSignIn fatal: ${ex.message}", ex)
+            startActivity(Intent(this@LoginActivity, MainActivity::class.java))
             finish()
         }
     }

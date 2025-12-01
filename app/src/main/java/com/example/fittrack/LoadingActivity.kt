@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.animation.Animation
 import android.view.animation.ScaleAnimation
 import android.widget.ImageView
@@ -11,14 +12,15 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
-
 class LoadingActivity : AppCompatActivity() {
 
-    private lateinit var progressBar: ProgressBar
-    private lateinit var progressLabel: TextView
-    private lateinit var footerText: TextView
-    private lateinit var stepIcons: List<ImageView>
-    private lateinit var centerIcon: ImageView
+    private val TAG = "LoadingActivity"
+
+    private var progressBar: ProgressBar? = null
+    private var progressLabel: TextView? = null
+    private var footerText: TextView? = null
+    private var centerIcon: ImageView? = null
+    private var stepIcons: MutableList<ImageView> = mutableListOf()
 
     private var progress = 0
     private var stepIndex = 0
@@ -29,90 +31,225 @@ class LoadingActivity : AppCompatActivity() {
         "Preparing dashboard"
     )
 
+    // Resources are referenced here but if they don't exist app won't compile.
+    // At runtime we still guard and catch any errors.
     private val stepIconsRes = listOf(
-        R.drawable.ic_dumbbell,   // Step 1
-        R.drawable.ic_profile,    // Step 2
-        R.drawable.ic_dashboard   // Step 3
+        R.drawable.ic_dumbbell,
+        R.drawable.ic_profile,
+        R.drawable.ic_dashboard
     )
 
     private val handler = Handler(Looper.getMainLooper())
+    private var progressRunnable: Runnable? = null
+    private var started = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_loading)
 
-        progressBar = findViewById(R.id.progressBar)
-        progressLabel = findViewById(R.id.progressLabel)
-        footerText = findViewById(R.id.footerText)
-        centerIcon = findViewById(R.id.centerIcon)
+        try {
+            setContentView(R.layout.activity_loading)
+        } catch (ex: Exception) {
+            Log.e(TAG, "setContentView failed: ${ex.message}", ex)
+            // If layout inflate fails, navigate forward to avoid crash loop
+            safeNavigateToLogin()
+            return
+        }
 
-        stepIcons = listOf(
-            findViewById(R.id.stepIcon1),
-            findViewById(R.id.stepIcon2),
-            findViewById(R.id.stepIcon3)
-        )
+        try {
+            progressBar = findViewById(R.id.progressBar)
+            progressLabel = findViewById(R.id.progressLabel)
+            footerText = findViewById(R.id.footerText)
+            centerIcon = findViewById(R.id.centerIcon)
+        } catch (ex: Exception) {
+            Log.w(TAG, "findViewById initial fetch failed: ${ex.message}", ex)
+        }
 
-        startLoading()
+        // Safe attempt to collect step icons
+        try {
+            val ids = listOf(R.id.stepIcon1, R.id.stepIcon2, R.id.stepIcon3)
+            for (id in ids) {
+                try {
+                    val v = findViewById<ImageView?>(id)
+                    if (v != null) stepIcons.add(v)
+                } catch (inner: Exception) {
+                    Log.w(TAG, "Missing or invalid step icon for id=$id: ${inner.message}")
+                }
+            }
+        } catch (ex: Exception) {
+            Log.w(TAG, "Error while locating step icons: ${ex.message}", ex)
+        }
+
+        // log missing views for debugging
+        if (progressBar == null) Log.w(TAG, "progressBar view is missing.")
+        if (progressLabel == null) Log.w(TAG, "progressLabel view is missing.")
+        if (centerIcon == null) Log.w(TAG, "centerIcon view is missing.")
+        if (stepIcons.isEmpty()) Log.w(TAG, "No step icons found (stepIcon1..3).")
+
+        // Start loading (guarded)
+        startLoadingSafely()
     }
 
-    private fun startLoading() {
-        val progressRunnable = object : Runnable {
+    private fun startLoadingSafely() {
+        if (started) return
+        started = true
+
+        progressRunnable = object : Runnable {
             override fun run() {
-                if (progress <= 100) {
-                    progressBar.progress = progress
-                    progressLabel.text = "${loadingSteps[stepIndex]} ($progress%)"
-                    progress += 2
-
-                    // Every ~33% move to next step
-                    if (progress % 34 == 0 && stepIndex < loadingSteps.size - 1) {
-                        // Mark previous step as done
-                        stepIcons[stepIndex].setBackgroundResource(R.drawable.bg_step_done)
-
-                        // Move to next step
-                        stepIndex++
-                        stepIcons[stepIndex].setBackgroundResource(R.drawable.bg_step_active)
-
-                        // Update center icon with animation
-                        updateCenterIcon(stepIconsRes[stepIndex])
+                try {
+                    // If progressBar or progressLabel are null, still advance but don't touch UI
+                    if (progressBar == null || progressLabel == null) {
+                        progress += 4
+                        if (progress > 100) {
+                            safeNavigateToLogin()
+                            return
+                        }
+                        handler.postDelayed(this, 80)
+                        return
                     }
 
-                    handler.postDelayed(this, 80)
-                } else {
-                    // Mark last step done
-                    stepIcons[stepIndex].setBackgroundResource(R.drawable.bg_step_done)
-                    footerText.text = "Ready!"
-                    updateCenterIcon(R.drawable.ic_dashboard)
+                    if (progress <= 100) {
+                        // Update UI guarded
+                        try {
+                            progressBar?.progress = progress
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to set progressBar.progress: ${e.message}")
+                        }
+                        val stepText = if (stepIndex in loadingSteps.indices) loadingSteps[stepIndex] else "Loading"
+                        try {
+                            progressLabel?.text = "$stepText ($progress%)"
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to set progressLabel.text: ${e.message}")
+                        }
 
-                    //  Auto navigation after short delay
-                    handler.postDelayed({
-                        val intent = Intent(this@LoadingActivity, LoginActivity::class.java)
-                        startActivity(intent)
-                        finish()
-                    }, 1000) // 1s wait for smooth finish
+                        progress += 4
+
+                        // Move to next step on thresholds (defensive math)
+                        try {
+                            if (progress % 34 == 0 && stepIndex < loadingSteps.size - 1) {
+                                if (stepIndex < stepIcons.size) {
+                                    try {
+                                        stepIcons[stepIndex].setBackgroundResource(R.drawable.bg_step_done)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to mark step done: ${e.message}")
+                                    }
+                                }
+                                stepIndex = (stepIndex + 1).coerceAtMost(loadingSteps.size - 1)
+                                if (stepIndex < stepIcons.size) {
+                                    try {
+                                        stepIcons[stepIndex].setBackgroundResource(R.drawable.bg_step_active)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to mark step active: ${e.message}")
+                                    }
+                                }
+                                val resIndex = stepIndex.coerceAtMost(stepIconsRes.size - 1)
+                                try {
+                                    updateCenterIcon(stepIconsRes[resIndex])
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "updateCenterIcon error: ${e.message}")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Step update error: ${e.message}")
+                        }
+
+                        handler.postDelayed(this, 80)
+                    } else {
+                        // Finalize UI
+                        try {
+                            if (stepIndex < stepIcons.size) stepIcons[stepIndex].setBackgroundResource(R.drawable.bg_step_done)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to finalize step icon: ${e.message}")
+                        }
+                        try {
+                            footerText?.text = "Ready!"
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to set footerText: ${e.message}")
+                        }
+                        try {
+                            updateCenterIcon(R.drawable.ic_dashboard)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to update center icon final: ${e.message}")
+                        }
+
+                        handler.postDelayed({
+                            safeNavigateToLogin()
+                        }, 600)
+                    }
+                } catch (ex: Exception) {
+                    // Log full stacktrace for debugging
+                    Log.e(TAG, "Unhandled exception in loading runnable: ${ex.message}", ex)
+                    safeNavigateToLogin()
                 }
             }
         }
 
-        // First step active
-        stepIcons[0].setBackgroundResource(R.drawable.bg_step_active)
-        updateCenterIcon(stepIconsRes[0])
+        // Initialize UI safely
+        try {
+            if (stepIcons.isNotEmpty()) {
+                try { stepIcons[0].setBackgroundResource(R.drawable.bg_step_active) } catch (e: Exception) { Log.w(TAG, "init stepIcons[0] failed: ${e.message}") }
+                val res = try { stepIconsRes[0] } catch (e: Exception) { R.drawable.ic_dashboard }
+                try { updateCenterIcon(res) } catch (e: Exception) { Log.w(TAG, "init center icon failed: ${e.message}") }
+            } else {
+                try { updateCenterIcon(R.drawable.ic_dashboard) } catch (e: Exception) { Log.w(TAG, "init center icon fallback failed: ${e.message}") }
+            }
+        } catch (ex: Exception) {
+            Log.w(TAG, "UI init failed: ${ex.message}", ex)
+        }
 
-        handler.post(progressRunnable)
+        progress = 0
+        stepIndex = 0
+        progressRunnable?.let { handler.post(it) }
     }
 
     private fun updateCenterIcon(resId: Int) {
-        centerIcon.setImageResource(resId)
+        try {
+            centerIcon?.setImageResource(resId)
+            centerIcon?.let { icon ->
+                val pulse = ScaleAnimation(
+                    0.85f, 1.15f,
+                    0.85f, 1.15f,
+                    Animation.RELATIVE_TO_SELF, 0.5f,
+                    Animation.RELATIVE_TO_SELF, 0.5f
+                )
+                pulse.duration = 350
+                pulse.repeatCount = 1
+                pulse.repeatMode = Animation.REVERSE
+                icon.startAnimation(pulse)
+            }
+        } catch (ex: Exception) {
+            Log.w(TAG, "updateCenterIcon failed: ${ex.message}", ex)
+        }
+    }
 
-        // Scale (pulse) animation
-        val pulse = ScaleAnimation(
-            0.8f, 1.2f,   // from X, to X
-            0.8f, 1.2f,   // from Y, to Y
-            Animation.RELATIVE_TO_SELF, 0.5f, // pivot X center
-            Animation.RELATIVE_TO_SELF, 0.5f  // pivot Y center
-        )
-        pulse.duration = 400
-        pulse.repeatCount = 1
-        pulse.repeatMode = Animation.REVERSE
-        centerIcon.startAnimation(pulse)
+    private fun safeNavigateToLogin() {
+        // Run once and stop runnable
+        try {
+            progressRunnable?.let { handler.removeCallbacks(it) }
+        } catch (ex: Exception) {
+            Log.w(TAG, "Failed to remove callbacks: ${ex.message}")
+        }
+
+        try {
+            runOnUiThread {
+                try {
+                    val intent = Intent(this@LoadingActivity, LoginActivity::class.java)
+                    startActivity(intent)
+                    finish()
+                } catch (ex: Exception) {
+                    Log.e(TAG, "Navigation to LoginActivity failed: ${ex.message}", ex)
+                }
+            }
+        } catch (ex: Exception) {
+            Log.e(TAG, "safeNavigateToLogin runOnUiThread failed: ${ex.message}", ex)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            progressRunnable?.let { handler.removeCallbacks(it) }
+        } catch (ex: Exception) {
+            Log.w(TAG, "onDestroy removeCallbacks failed: ${ex.message}")
+        }
     }
 }

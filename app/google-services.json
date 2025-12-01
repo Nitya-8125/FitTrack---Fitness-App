@@ -1,33 +1,41 @@
 {
   "project_info": {
-    "project_number": "478189604499",
-    "project_id": "fittrack-fitness-tracking-app",
-    "storage_bucket": "fittrack-fitness-tracking-app.firebasestorage.app"
+    "project_number": "620794947868",
+    "project_id": "fittrack-app-89523",
+    "storage_bucket": "fittrack-app-89523.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:478189604499:android:c27089fc55c2e788678766",
+        "mobilesdk_app_id": "1:620794947868:android:e4fc47871a44176099f2d9",
         "android_client_info": {
           "package_name": "com.example.fittrack"
         }
       },
       "oauth_client": [
         {
-          "client_id": "478189604499-9ef5c6tipnls4cvdueduf6cbeo9tuc6c.apps.googleusercontent.com",
+          "client_id": "620794947868-tt3jkjb7q3b4q2li9pu4pc6mh45l9dht.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.fittrack",
+            "certificate_hash": "6198a84bfbbff8893fd702b714870ef366fe8bdf"
+          }
+        },
+        {
+          "client_id": "620794947868-qjifo0h2b6ocib6maenhbm37g96mcl96.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyD_zMvJei0QdmfAfwpO4rfUVkxccEZQG0Q"
+          "current_key": "AIzaSyC-y4nB4mYlMhPybM1_9DVXTbOnG9haO48"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "478189604499-9ef5c6tipnls4cvdueduf6cbeo9tuc6c.apps.googleusercontent.com",
+              "client_id": "620794947868-qjifo0h2b6ocib6maenhbm37g96mcl96.apps.googleusercontent.com",
               "client_type": 3
             }
           ]

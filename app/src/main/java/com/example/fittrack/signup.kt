@@ -7,6 +7,7 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.snackbar.Snackbar
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
 
 class SignupActivity : AppCompatActivity() {
 
@@ -194,12 +195,52 @@ class SignupActivity : AppCompatActivity() {
                     // 🔥 Create Firebase Authentication account
                     auth.createUserWithEmailAndPassword(email, password)
                         .addOnCompleteListener { task ->
+
                             if (!task.isSuccessful) {
-                                Snackbar.make(stepContainer, "Registration failed: ${task.exception?.message}", Snackbar.LENGTH_LONG).show()
+                                val ex = task.exception
+
+                                // EMAIL ALREADY IN USE -> TRY SIGN IN
+                                if (ex is FirebaseAuthUserCollisionException) {
+                                    Snackbar.make(stepContainer, "Email already registered — signing you in...", Snackbar.LENGTH_LONG).show()
+
+                                    auth.signInWithEmailAndPassword(email, password)
+                                        .addOnCompleteListener { signTask ->
+                                            if (signTask.isSuccessful) {
+
+                                                // Save profile after sign-in
+                                                firestoreHelper.registerUser(
+                                                    email = email,
+                                                    password = password,
+                                                    firstName = firstName,
+                                                    lastName = lastName,
+                                                    age = age,
+                                                    gender = gender,
+                                                    height = height,
+                                                    weight = weight
+                                                ) { success ->
+                                                    if (success) {
+                                                        Snackbar.make(stepContainer, "Login successful!", Snackbar.LENGTH_LONG).show()
+                                                        startActivity(Intent(this, MainActivity::class.java))
+                                                        finish()
+                                                    } else {
+                                                        Snackbar.make(stepContainer, "Failed to save profile!", Snackbar.LENGTH_LONG).show()
+                                                    }
+                                                }
+
+                                            } else {
+                                                Snackbar.make(stepContainer, "Sign in failed: ${signTask.exception?.message}", Snackbar.LENGTH_LONG).show()
+                                            }
+                                        }
+
+                                    return@addOnCompleteListener
+                                }
+
+                                // Other errors
+                                Snackbar.make(stepContainer, "Registration failed: ${ex?.message}", Snackbar.LENGTH_LONG).show()
                                 return@addOnCompleteListener
                             }
 
-                            // 🔥 Save Full Profile into Firestore using Helper
+                            // 🔥 Registration success -> save profile
                             firestoreHelper.registerUser(
                                 email = email,
                                 password = password,

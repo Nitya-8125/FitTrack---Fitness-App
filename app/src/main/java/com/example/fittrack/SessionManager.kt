@@ -16,10 +16,21 @@ class SessionManager(context: Context) {
         private const val KEY_EMAIL = "email"
         private const val KEY_AGE = "age"
         private const val KEY_HEIGHT = "height"
+        private const val KEY_USER_TYPE = "user_type"    // <- added
     }
 
-    // Save login session
-    fun saveLoginSession(firstName: String, lastName: String, email: String, age: Int, height: Int) {
+    /**
+     * Save login session.
+     * `userType` is optional and defaults to "Fitness Member" to preserve existing calls.
+     */
+    fun saveLoginSession(
+        firstName: String,
+        lastName: String,
+        email: String,
+        age: Int,
+        height: Int,
+        userType: String = "Fitness Member"
+    ) {
         val editor = prefs.edit()
         editor.putBoolean(KEY_IS_LOGGED_IN, true)
         editor.putString(KEY_FIRST_NAME, firstName)
@@ -27,7 +38,13 @@ class SessionManager(context: Context) {
         editor.putString(KEY_EMAIL, email)
         editor.putInt(KEY_AGE, age)
         editor.putInt(KEY_HEIGHT, height)
+        editor.putString(KEY_USER_TYPE, userType)
         editor.apply()
+    }
+
+    // Convenience setter for only user type (useful when profile updates userType separately)
+    fun setUserType(userType: String) {
+        prefs.edit().putString(KEY_USER_TYPE, userType).apply()
     }
 
     // Check if user is logged in
@@ -50,6 +67,13 @@ class SessionManager(context: Context) {
         return prefs.getString(KEY_LAST_NAME, null)
     }
 
+    // Get full name convenience
+    fun getFullName(): String {
+        val f = getFirstName().orEmpty()
+        val l = getLastName().orEmpty()
+        return listOf(f, l).filter { it.isNotBlank() }.joinToString(" ").ifBlank { "User" }
+    }
+
     // Get age
     fun getAge(): Int {
         return prefs.getInt(KEY_AGE, 0)
@@ -58,6 +82,11 @@ class SessionManager(context: Context) {
     // Get height
     fun getHeight(): Int {
         return prefs.getInt(KEY_HEIGHT, 0)
+    }
+
+    // Get user type (may be null)
+    fun getUserType(): String? {
+        return prefs.getString(KEY_USER_TYPE, null)
     }
 
     // Clear session (logout)

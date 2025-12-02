@@ -27,7 +27,12 @@ class FirestoreDatabaseHelper {
      * If a document exists with ID == email, it returns email immediately (backwards compatibility).
      * Otherwise it queries `users` collection for a document whose "email" field matches.
      */
-    private fun getDocIdByEmail(email: String, onResult: (String?) -> Unit) {
+    fun getDocIdByEmail(email: String, onResult: (String?) -> Unit) {
+        if (email.isBlank()) {
+            onResult(null)
+            return
+        }
+
         // Fast path: doc with id == email
         db.collection("users").document(email).get()
             .addOnSuccessListener { doc ->
@@ -65,6 +70,7 @@ class FirestoreDatabaseHelper {
                     }
             }
     }
+
 
     // ---------------- USERS COLLECTION ----------------
 
@@ -262,6 +268,8 @@ class FirestoreDatabaseHelper {
                 }
         }
     }
+
+
 
     // ---------------- GOAL UPDATES ----------------
 

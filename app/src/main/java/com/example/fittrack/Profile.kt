@@ -10,9 +10,9 @@ import androidx.fragment.app.Fragment
 import com.example.fittrack.R
 import com.example.fittrack.SessionManager
 import com.example.fittrack.LoginActivity
+import com.example.fittrack.FirestoreDatabaseHelper
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.example.fittrack.FirestoreDatabaseHelper
 
 class ProfileFragment : Fragment() {
 
@@ -49,10 +49,10 @@ class ProfileFragment : Fragment() {
         auth = FirebaseAuth.getInstance()
         session = SessionManager(requireContext())
 
-        // Get current user email
+        // Get current user email (fallback to session)
         email = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
 
-        // Load user data from Firestore
+        // Load user data from Firestore (fills fields)
         loadUserData()
 
         // Button actions
@@ -79,7 +79,7 @@ class ProfileFragment : Fragment() {
                 val fullName = "$firstName $lastName"
                 val stepsGoal = ((data["daily_steps_goal"] as? Number)?.toInt() ?: 10000)
                 val caloriesGoal = ((data["daily_calories_goal"] as? Number)?.toInt() ?: 2000)
-                val targetWeight = (data["target_weight"] as? Double) ?: (data["weightToday"] as? Double) ?: 70.0
+                val targetWeight = (data["target_weight"] as? Number)?.toDouble() ?: (data["weightToday"] as? Number)?.toDouble() ?: 70.0
 
                 tvName.text = fullName
                 tvEmail.text = email
@@ -103,20 +103,28 @@ class ProfileFragment : Fragment() {
             return
         }
 
-        val updates = mapOf(
-            "daily_steps_goal" to steps,
-            "daily_calories_goal" to calories,
-            "target_weight" to targetWeight
-        )
+        // Use helper so doc-id resolution (UID vs email) is handled
+        val helper = FirestoreDatabaseHelper()
+        btnUpdateGoals.isEnabled = false
+        helper.updateGoals(email, steps, calories, targetWeight) { success ->
+            if (!isAdded) return@updateGoals
+            btnUpdateGoals.isEnabled = true
 
-        firestore.collection("users").document(email)
-            .update(updates)
-            .addOnSuccessListener {
+            if (success) {
                 Toast.makeText(requireContext(), "Goals updated successfully!", Toast.LENGTH_SHORT).show()
-            }
-            .addOnFailureListener {
+
+                // Optionally update session or local values if you store goals in session (not required)
+                // session.setUserGoals(steps, calories, targetWeight) // if you implement
+
+                // Navigate to Home and ensure HomeFragment refreshes data immediately
+                activity?.supportFragmentManager?.beginTransaction()
+                    ?.replace(R.id.fragment_container, com.example.fittrack.ui.home.HomeFragment())
+                    ?.commit()
+
+            } else {
                 Toast.makeText(requireContext(), "Failed to update goals!", Toast.LENGTH_SHORT).show()
             }
+        }
     }
 
     // ---------------- LOGOUT ----------------

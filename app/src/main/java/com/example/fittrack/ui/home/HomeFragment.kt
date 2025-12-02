@@ -21,7 +21,9 @@ import com.github.mikephil.charting.components.XAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
+import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
 import java.util.*
@@ -86,10 +88,11 @@ class HomeFragment : Fragment(), SensorEventListener {
         email = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
 
         if (email.isEmpty()) {
-            // Use safe context and isAdded check
             if (isAdded) {
                 context?.let { ctx -> Toast.makeText(ctx, "User not logged in!", Toast.LENGTH_SHORT).show() }
             }
+            // still draw empty chart for safety
+            drawEmptyChart()
         } else {
             loadUserData()
         }
@@ -113,16 +116,17 @@ class HomeFragment : Fragment(), SensorEventListener {
 
             try {
                 if (data != null) {
-                    val firstName = (data["firstName"] as? String) ?: "User"
-                    val targetWeight = (data["target_weight"] as? Double) ?: 70.0
-                    userWeight = (data["weightToday"] as? Double) ?: (data["weight"] as? Double) ?: 70.0
+                    val firstName = (data["firstName"] as? String) ?: (data["name"] as? String) ?: "User"
+                    val targetWeight = (data["target_weight"] as? Number)?.toDouble() ?: 70.0
+                    userWeight = (data["weightToday"] as? Number)?.toDouble()
+                        ?: (data["weight"] as? Number)?.toDouble() ?: 70.0
                     stepsGoal = ((data["daily_steps_goal"] as? Number)?.toInt() ?: 10000)
                     caloriesGoal = ((data["daily_calories_goal"] as? Number)?.toInt() ?: 2000)
 
                     // Update UI safely
                     tvGreeting?.text = "Welcome, $firstName!"
                     tvSteps?.text = "Goal: $stepsGoal"
-                    tvWeight?.text = "Weight Today: $userWeight kg (Target: $targetWeight kg)"
+                    tvWeight?.text = "Weight Today: ${"%.1f".format(userWeight)} kg (Target: ${"%.1f".format(targetWeight)} kg)"
 
                     progressBar?.max = stepsGoal
                     progressCalories?.max = caloriesGoal
@@ -131,8 +135,15 @@ class HomeFragment : Fragment(), SensorEventListener {
                     loadDailyStats()
                     loadDailyChart()
                 } else {
-                    // no data found
-                    if (isAdded) context?.let { ctx -> Toast.makeText(ctx, "User data not found", Toast.LENGTH_SHORT).show() }
+                    // no data found -> show zeroed UI for new user
+                    tvGreeting?.text = "Welcome!"
+                    progressBar?.max = stepsGoal
+                    progressCalories?.max = caloriesGoal
+                    tvSteps?.text = "Goal: $stepsGoal"
+                    tvWeight?.text = "Weight Today: ${"%.1f".format(userWeight)} kg"
+                    tvCalories?.text = "0 / $caloriesGoal"
+                    tvCurrentSteps?.text = "0"
+                    drawEmptyChart()
                 }
             } catch (ex: Exception) {
                 if (isAdded) context?.let { ctx -> Toast.makeText(ctx, "Error parsing user data", Toast.LENGTH_SHORT).show() }
@@ -145,22 +156,40 @@ class HomeFragment : Fragment(), SensorEventListener {
         if (email.isEmpty() || !isAdded) return
 
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        firestore.collection("daily_stats").document("${email}_$today")
-            .get()
-            .addOnSuccessListener { doc ->
-                if (!isAdded) return@addOnSuccessListener
-                try {
-                    val stepsToday = (doc.getLong("steps") ?: 0L).toInt()
-                    val caloriesToday = (doc.getLong("calories") ?: 0L).toInt()
+        val helper = FirestoreDatabaseHelper()
 
-                    tvCalories?.text = "$caloriesToday / $caloriesGoal"
-                    tvCurrentSteps?.text = stepsToday.toString()
-                    progressBar?.progress = stepsToday
-                    progressCalories?.progress = caloriesToday
-                } catch (ex: Exception) {
-                    // ignore UI update if fragment not ready
+        // Resolve the user's doc id first (handles UID or email doc ids)
+        helper.getDocIdByEmail(email) { docId ->
+            if (!isAdded) return@getDocIdByEmail
+
+            val idToUse = docId ?: email
+            firestore.collection("daily_stats").document("${idToUse}_$today")
+                .get()
+                .addOnSuccessListener { doc ->
+                    if (!isAdded) return@addOnSuccessListener
+                    try {
+                        val stepsToday = (doc.getLong("steps") ?: 0L).toInt()
+                        val caloriesToday = (doc.getLong("calories") ?: 0L).toInt()
+
+                        tvCalories?.text = "$caloriesToday / $caloriesGoal"
+                        tvCurrentSteps?.text = stepsToday.toString()
+                        progressBar?.progress = stepsToday
+                        progressCalories?.progress = caloriesToday
+                    } catch (ex: Exception) {
+                        // ignore UI update if fragment not ready
+                    }
                 }
-            }
+                .addOnFailureListener {
+                    // If fetching fails, fallback to showing zero
+                    if (!isAdded) return@addOnFailureListener
+                    try {
+                        tvCalories?.text = "0 / $caloriesGoal"
+                        tvCurrentSteps?.text = "0"
+                        progressBar?.progress = 0
+                        progressCalories?.progress = 0
+                    } catch (_: Exception) {}
+                }
+        }
     }
 
     // ---------------- SENSOR EVENTS ----------------
@@ -204,25 +233,46 @@ class HomeFragment : Fragment(), SensorEventListener {
 
     private fun saveStatsToFirestore(date: String, steps: Int, calories: Int, weight: Double) {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        val dailyData = mapOf(
-            "user_email" to email,
-            "date" to date,
-            "steps" to steps,
-            "calories" to calories,
-            "weight" to weight
-        )
-        val hourlyData = mapOf(
-            "email" to email,
-            "date" to date,
-            "hour" to hour,
-            "steps" to steps,
-            "calories" to calories,
-            "weight" to weight
-        )
+        val helper = FirestoreDatabaseHelper()
 
-        // Fire-and-forget: no UI changes here
-        firestore.collection("daily_stats").document("${email}_$date").set(dailyData)
-        firestore.collection("hourly_stats").document("${email}_${date}_$hour").set(hourlyData)
+        // Use helper to save daily stats (helper resolves doc id by UID or email)
+        try {
+            helper.saveDailyStats(email, steps, calories, weight)
+        } catch (e: Exception) {
+            // fallback: direct write (rare)
+            try {
+                firestore.collection("daily_stats").document("${email}_$date").set(
+                    mapOf(
+                        "user_email" to email,
+                        "date" to date,
+                        "steps" to steps,
+                        "calories" to calories,
+                        "weight" to weight,
+                        "updatedAt" to System.currentTimeMillis()
+                    )
+                )
+            } catch (_: Exception) { /* ignore write failure */ }
+        }
+
+        // Use helper to save hourly stats (keeps IDs consistent)
+        try {
+            helper.saveHourlyStats(email, hour, steps, calories, weight)
+        } catch (e: Exception) {
+            // fallback: direct write
+            try {
+                firestore.collection("hourly_stats").document("${email}_${date}_$hour").set(
+                    mapOf(
+                        "email" to email,
+                        "date" to date,
+                        "hour" to hour,
+                        "steps" to steps,
+                        "calories" to calories,
+                        "weight" to weight,
+                        "updatedAt" to System.currentTimeMillis()
+                    )
+                )
+            } catch (_: Exception) { /* ignore */ }
+        }
     }
 
     private fun calculateCalories(steps: Int, weightKg: Double): Int {
@@ -234,28 +284,102 @@ class HomeFragment : Fragment(), SensorEventListener {
 
     // ---------------- CHART HANDLING ----------------
     private fun loadDailyChart() {
-        if (!isAdded || email.isEmpty()) return
+        if (!isAdded || email.isEmpty()) {
+            drawEmptyChart()
+            return
+        }
 
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        firestore.collection("hourly_stats")
-            .whereEqualTo("email", email)
-            .whereEqualTo("date", today)
-            .get()
-            .addOnSuccessListener { snapshot ->
-                if (!isAdded) return@addOnSuccessListener
-                val entries = mutableListOf<Entry>()
-                val hourlyMap = mutableMapOf<Int, Int>()
-                for (h in 0..23) hourlyMap[h] = 0
-                for (doc in snapshot.documents) {
-                    val hour = (doc.getLong("hour") ?: 0L).toInt()
-                    val steps = (doc.getLong("steps") ?: 0L).toInt()
-                    hourlyMap[hour] = steps
+        val helper = FirestoreDatabaseHelper()
+
+        // Resolve doc id first (UID or email)
+        helper.getDocIdByEmail(email) { docId ->
+            if (!isAdded) return@getDocIdByEmail
+
+            val idToUse = docId ?: email
+
+            // First try: query hourly_stats by email field (fast and common)
+            firestore.collection("hourly_stats")
+                .whereEqualTo("email", email)
+                .whereEqualTo("date", today)
+                .get()
+                .addOnSuccessListener { snapshot ->
+                    if (!isAdded) return@addOnSuccessListener
+
+                    if (!snapshot.isEmpty) {
+                        buildChartFromHourlySnapshot(snapshot.documents.map { it.data ?: emptyMap<String, Any>() })
+                        return@addOnSuccessListener
+                    }
+
+                    // Fallback: attempt to read hourly documents by constructed document ids
+                    val hourlyMap = mutableMapOf<Int, Int>()
+                    for (h in 0..23) hourlyMap[h] = 0
+
+                    val tasks = mutableListOf<com.google.android.gms.tasks.Task<DocumentSnapshot>>()
+                    for (h in 0..23) {
+                        val docRef = firestore.collection("hourly_stats").document("${idToUse}_${today}_$h")
+                        tasks.add(docRef.get())
+                    }
+
+                    Tasks.whenAllSuccess<DocumentSnapshot>(tasks)
+                        .addOnSuccessListener { results ->
+                            if (!isAdded) return@addOnSuccessListener
+                            for (snap in results) {
+                                if (snap != null && snap.exists()) {
+                                    val hour = (snap.getLong("hour") ?: 0L).toInt()
+                                    val steps = (snap.getLong("steps") ?: 0L).toInt()
+                                    hourlyMap[hour] = steps
+                                }
+                            }
+                            val entriesList = mutableListOf<Entry>()
+                            for (h in 0..23) entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
+                            drawChart(entriesList)
+                        }
+                        .addOnFailureListener {
+                            drawEmptyChart()
+                        }
                 }
-                for ((hour, steps) in hourlyMap) {
-                    entries.add(Entry(hour.toFloat(), steps.toFloat()))
+                .addOnFailureListener {
+                    // Query failed — fallback to per-doc reads (same as above)
+                    val hourlyMap = mutableMapOf<Int, Int>()
+                    for (h in 0..23) hourlyMap[h] = 0
+                    val tasks = mutableListOf<com.google.android.gms.tasks.Task<DocumentSnapshot>>()
+                    for (h in 0..23) {
+                        val docRef = firestore.collection("hourly_stats").document("${idToUse}_${today}_$h")
+                        tasks.add(docRef.get())
+                    }
+                    Tasks.whenAllSuccess<DocumentSnapshot>(tasks)
+                        .addOnSuccessListener { results ->
+                            if (!isAdded) return@addOnSuccessListener
+                            for (snap in results) {
+                                if (snap != null && snap.exists()) {
+                                    val hour = (snap.getLong("hour") ?: 0L).toInt()
+                                    val steps = (snap.getLong("steps") ?: 0L).toInt()
+                                    hourlyMap[hour] = steps
+                                }
+                            }
+                            val entriesList = mutableListOf<Entry>()
+                            for (h in 0..23) entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
+                            drawChart(entriesList)
+                        }
+                        .addOnFailureListener {
+                            drawEmptyChart()
+                        }
                 }
-                drawChart(entries)
-            }
+        }
+    }
+
+    private fun buildChartFromHourlySnapshot(listOfMaps: List<Map<String, Any>>) {
+        val hourlyMap = mutableMapOf<Int, Int>()
+        for (h in 0..23) hourlyMap[h] = 0
+        for (m in listOfMaps) {
+            val hour = (m["hour"] as? Number)?.toInt() ?: 0
+            val steps = (m["steps"] as? Number)?.toInt() ?: 0
+            if (hour in 0..23) hourlyMap[hour] = steps
+        }
+        val entries = mutableListOf<Entry>()
+        for (h in 0..23) entries.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
+        drawChart(entries)
     }
 
     private fun updateChart() {
@@ -266,12 +390,14 @@ class HomeFragment : Fragment(), SensorEventListener {
         if (!isAdded) return
         try {
             val dataSet = LineDataSet(entries, "Steps Today")
-            // Use safe context access
-            val ctx = context
-            if (ctx == null) return
+            val ctx = context ?: return
 
-            dataSet.color = resources.getColor(R.color.blue_700, ctx.theme)
-            dataSet.valueTextColor = resources.getColor(R.color.black, ctx.theme)
+            // Safe color fetch
+            try {
+                dataSet.color = resources.getColor(R.color.blue_700, ctx.theme)
+                dataSet.valueTextColor = resources.getColor(R.color.black, ctx.theme)
+            } catch (_: Exception) {}
+
             dataSet.lineWidth = 2f
             dataSet.circleRadius = 4f
             dataSet.setDrawFilled(true)
@@ -289,8 +415,15 @@ class HomeFragment : Fragment(), SensorEventListener {
         }
     }
 
+    private fun drawEmptyChart() {
+        val entries = mutableListOf<Entry>()
+        for (h in 0..23) entries.add(Entry(h.toFloat(), 0f))
+        drawChart(entries)
+    }
+
     // ---------------- DATE & GOAL HANDLING ----------------
     private fun startDateTimeUpdater() {
+        if (timeUpdater != null) return
         timeUpdater = object : Runnable {
             override fun run() {
                 if (!isAdded) return
@@ -330,6 +463,15 @@ class HomeFragment : Fragment(), SensorEventListener {
     // ---------------- LIFECYCLE HANDLERS ----------------
     override fun onResume() {
         super.onResume()
+        // in onResume() before loadUserData():
+        email = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
+
+        // Ensure latest profile/goals are shown after returning from ProfileFragment
+        if (!email.isNullOrEmpty()) {
+            // Re-load user goals and stats from Firestore
+            loadUserData()
+        }
+        // Re-register sensor if needed
         if (!goalCompleted) {
             stepSensor?.let { sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
         }
@@ -339,6 +481,7 @@ class HomeFragment : Fragment(), SensorEventListener {
         super.onPause()
         sensorManager?.unregisterListener(this)
         timeUpdater?.let { handler.removeCallbacks(it) }
+        timeUpdater = null
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}

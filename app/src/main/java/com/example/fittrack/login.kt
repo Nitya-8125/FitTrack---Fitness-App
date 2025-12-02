@@ -44,6 +44,18 @@ class LoginActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Initialize FirebaseAuth early so we can check persistent sign-in
+        auth = FirebaseAuth.getInstance()
+
+        // --- PERSISTENT LOGIN: if already signed-in, skip login screen ---
+        val current = auth.currentUser
+        if (current != null) {
+            Log.d(TAG, "User already signed in (uid=${current.uid}) — routing to MainActivity")
+            startActivity(Intent(this, MainActivity::class.java))
+            finish()
+            return
+        }
+
         try {
             setContentView(R.layout.activity_login)
         } catch (ex: Exception) {
@@ -52,8 +64,6 @@ class LoginActivity : AppCompatActivity() {
             finish()
             return
         }
-
-        auth = FirebaseAuth.getInstance()
 
         // Bind views — guarded so missing ids are reported
         try {

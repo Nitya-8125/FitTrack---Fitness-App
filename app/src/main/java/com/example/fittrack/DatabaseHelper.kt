@@ -27,19 +27,118 @@ class FirestoreDatabaseHelper {
      * If a document exists with ID == email, it returns email immediately (backwards compatibility).
      * Otherwise it queries `users` collection for a document whose "email" field matches.
      */
+    // Replace the existing getDocIdByEmail(...) with this implementation
     fun getDocIdByEmail(email: String, onResult: (String?) -> Unit) {
         if (email.isBlank()) {
             onResult(null)
             return
         }
 
-        // Fast path: doc with id == email
-        db.collection("users").document(email).get()
-            .addOnSuccessListener { doc ->
-                if (doc.exists()) {
-                    onResult(email)
-                } else {
-                    // Query by field "email"
+        // 1) Fast path: if current Firebase UID exists and a user doc with that UID exists, use it
+        val uid = currentUid()
+        if (!uid.isNullOrEmpty()) {
+            db.collection("users").document(uid).get()
+                .addOnSuccessListener { docByUid ->
+                    if (docByUid.exists()) {
+                        onResult(uid)
+                    } else {
+                        // 2) Next fast path: maybe app used email as document id historically
+                        db.collection("users").document(email).get()
+                            .addOnSuccessListener { docByEmailId ->
+                                if (docByEmailId.exists()) {
+                                    onResult(email)
+                                } else {
+                                    // 3) Fallback: query by field "email"
+                                    db.collection("users")
+                                        .whereEqualTo("email", email)
+                                        .limit(1)
+                                        .get()
+                                        .addOnSuccessListener { snapshot ->
+                                            val docId = if (!snapshot.isEmpty) snapshot.documents[0].id else null
+                                            onResult(docId)
+                                        }
+                                        .addOnFailureListener { e ->
+                                            Log.e(TAG, "getDocIdByEmail: query-by-field failed", e)
+                                            onResult(null)
+                                        }
+                                }
+                            }
+                            .addOnFailureListener { e ->
+                                Log.e(TAG, "getDocIdByEmail: direct doc(email) check failed", e)
+                                // try query-by-field as fallback
+                                db.collection("users")
+                                    .whereEqualTo("email", email)
+                                    .limit(1)
+                                    .get()
+                                    .addOnSuccessListener { snapshot ->
+                                        val docId = if (!snapshot.isEmpty) snapshot.documents[0].id else null
+                                        onResult(docId)
+                                    }
+                                    .addOnFailureListener {
+                                        onResult(null)
+                                    }
+                            }
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "getDocIdByEmail: direct doc(uid) check failed", e)
+                    // If uid path failed for some reason, fallback to existing logic:
+                    db.collection("users").document(email).get()
+                        .addOnSuccessListener { docByEmailId ->
+                            if (docByEmailId.exists()) {
+                                onResult(email)
+                            } else {
+                                db.collection("users")
+                                    .whereEqualTo("email", email)
+                                    .limit(1)
+                                    .get()
+                                    .addOnSuccessListener { snapshot ->
+                                        val docId = if (!snapshot.isEmpty) snapshot.documents[0].id else null
+                                        onResult(docId)
+                                    }
+                                    .addOnFailureListener {
+                                        onResult(null)
+                                    }
+                            }
+                        }
+                        .addOnFailureListener {
+                            // last resort: query-by-field
+                            db.collection("users")
+                                .whereEqualTo("email", email)
+                                .limit(1)
+                                .get()
+                                .addOnSuccessListener { snapshot ->
+                                    val docId = if (!snapshot.isEmpty) snapshot.documents[0].id else null
+                                    onResult(docId)
+                                }
+                                .addOnFailureListener {
+                                    onResult(null)
+                                }
+                        }
+                }
+        } else {
+            // If no UID (edge case), keep original behavior: check doc id == email then query by field
+            db.collection("users").document(email).get()
+                .addOnSuccessListener { doc ->
+                    if (doc.exists()) {
+                        onResult(email)
+                    } else {
+                        db.collection("users")
+                            .whereEqualTo("email", email)
+                            .limit(1)
+                            .get()
+                            .addOnSuccessListener { snapshot ->
+                                val docId = if (!snapshot.isEmpty) snapshot.documents[0].id else null
+                                onResult(docId)
+                            }
+                            .addOnFailureListener { e ->
+                                Log.e(TAG, "getDocIdByEmail: query failure", e)
+                                onResult(null)
+                            }
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "getDocIdByEmail: direct doc check failure", e)
                     db.collection("users")
                         .whereEqualTo("email", email)
                         .limit(1)
@@ -48,29 +147,12 @@ class FirestoreDatabaseHelper {
                             val docId = if (!snapshot.isEmpty) snapshot.documents[0].id else null
                             onResult(docId)
                         }
-                        .addOnFailureListener { e ->
-                            Log.e(TAG, "getDocIdByEmail: query failure", e)
+                        .addOnFailureListener {
                             onResult(null)
                         }
                 }
-            }
-            .addOnFailureListener { e ->
-                Log.e(TAG, "getDocIdByEmail: direct doc check failure", e)
-                // fallback to query-by-field
-                db.collection("users")
-                    .whereEqualTo("email", email)
-                    .limit(1)
-                    .get()
-                    .addOnSuccessListener { snapshot ->
-                        val docId = if (!snapshot.isEmpty) snapshot.documents[0].id else null
-                        onResult(docId)
-                    }
-                    .addOnFailureListener {
-                        onResult(null)
-                    }
-            }
+        }
     }
-
 
     // ---------------- USERS COLLECTION ----------------
 

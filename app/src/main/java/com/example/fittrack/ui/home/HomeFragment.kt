@@ -8,6 +8,7 @@ import android.hardware.SensorManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -30,6 +31,10 @@ import java.util.*
 import com.example.fittrack.FirestoreDatabaseHelper
 
 class HomeFragment : Fragment(), SensorEventListener {
+
+    companion object {
+        private const val TAG = "HomeFragment"
+    }
 
     private lateinit var firestore: FirebaseFirestore
     private lateinit var auth: FirebaseAuth
@@ -57,6 +62,10 @@ class HomeFragment : Fragment(), SensorEventListener {
 
     private var stepsGoal = 10000
     private var caloriesGoal = 2000
+
+    // --- auth state listener and last known email to detect changes ---
+    private var authStateListener: FirebaseAuth.AuthStateListener? = null
+    private var lastKnownEmail: String = ""
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
@@ -86,6 +95,49 @@ class HomeFragment : Fragment(), SensorEventListener {
 
         // Use email from Firebase if available, else from SessionManager (safe)
         email = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
+        lastKnownEmail = email
+
+        // Register auth state listener so chart updates immediately when user changes
+        authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+            val newEmail = firebaseAuth.currentUser?.email ?: session.getUserEmail().orEmpty()
+            if (newEmail != lastKnownEmail) {
+                Log.d(TAG, "Auth changed: old=$lastKnownEmail new=$newEmail")
+                lastKnownEmail = newEmail
+                email = newEmail
+
+                // Clear per-device step prefs so initial_steps isn't reused for a different account
+                try { prefs?.edit()?.clear()?.apply() } catch (_: Exception) {}
+
+                // Reset in-memory counters and UI so old user's numbers are not shown
+                totalSteps = 0f
+                goalCompleted = false
+                try {
+                    tvCurrentSteps?.text = "0"
+                    tvCalories?.text = "0 / $caloriesGoal"
+                    progressBar?.progress = 0
+                    progressCalories?.progress = 0
+                } catch (_: Exception) {}
+
+                // Reload UI for new user (or draw empty if not logged in)
+                if (isAdded) {
+                    if (email.isNotEmpty()) {
+                        loadUserData()
+                        loadDailyChart()
+                        loadDailyStats()
+                    } else {
+                        drawEmptyChart()
+                        tvGreeting?.text = "Welcome!"
+                        tvSteps?.text = "Goal: $stepsGoal"
+                        tvWeight?.text = "Weight Today: ${"%.1f".format(userWeight)} kg"
+                        tvCalories?.text = "0 / $caloriesGoal"
+                        tvCurrentSteps?.text = "0"
+                        progressBar?.progress = 0
+                        progressCalories?.progress = 0
+                    }
+                }
+            }
+        }
+        authStateListener?.let { auth.addAuthStateListener(it) }
 
         if (email.isEmpty()) {
             if (isAdded) {
@@ -284,89 +336,155 @@ class HomeFragment : Fragment(), SensorEventListener {
 
     // ---------------- CHART HANDLING ----------------
     private fun loadDailyChart() {
-        if (!isAdded || email.isEmpty()) {
+        if (!isAdded) {
+            Log.d(TAG, "loadDailyChart: fragment not added -> returning")
+            return
+        }
+
+        // defensive: ensure we've got an email at least
+        val currentEmail = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
+        if (currentEmail.isEmpty()) {
+            Log.d(TAG, "loadDailyChart: no email available -> drawEmptyChart")
             drawEmptyChart()
             return
         }
+        email = currentEmail
 
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
         val helper = FirestoreDatabaseHelper()
 
-        // Resolve doc id first (UID or email)
         helper.getDocIdByEmail(email) { docId ->
             if (!isAdded) return@getDocIdByEmail
 
             val idToUse = docId ?: email
+            val tryPerDocFirst = !docId.isNullOrEmpty() && docId != email
 
-            // First try: query hourly_stats by email field (fast and common)
-            firestore.collection("hourly_stats")
-                .whereEqualTo("email", email)
-                .whereEqualTo("date", today)
-                .get()
-                .addOnSuccessListener { snapshot ->
-                    if (!isAdded) return@addOnSuccessListener
+            Log.d(TAG, "loadDailyChart: email=$email docId=$docId tryPerDocFirst=$tryPerDocFirst")
 
-                    if (!snapshot.isEmpty) {
-                        buildChartFromHourlySnapshot(snapshot.documents.map { it.data ?: emptyMap<String, Any>() })
-                        return@addOnSuccessListener
-                    }
+            if (tryPerDocFirst) {
+                // Attempt per-doc reads first (24 calls). If none exist, fallback to query-by-email.
+                val hourlyMap = mutableMapOf<Int, Int>()
+                for (h in 0..23) hourlyMap[h] = 0
 
-                    // Fallback: attempt to read hourly documents by constructed document ids
-                    val hourlyMap = mutableMapOf<Int, Int>()
-                    for (h in 0..23) hourlyMap[h] = 0
+                val tasks = mutableListOf<com.google.android.gms.tasks.Task<DocumentSnapshot>>()
+                for (h in 0..23) {
+                    val docRef = firestore.collection("hourly_stats").document("${idToUse}_${today}_$h")
+                    tasks.add(docRef.get())
+                }
 
-                    val tasks = mutableListOf<com.google.android.gms.tasks.Task<DocumentSnapshot>>()
-                    for (h in 0..23) {
-                        val docRef = firestore.collection("hourly_stats").document("${idToUse}_${today}_$h")
-                        tasks.add(docRef.get())
-                    }
+                Tasks.whenAllSuccess<DocumentSnapshot>(tasks)
+                    .addOnSuccessListener { results ->
+                        if (!isAdded) return@addOnSuccessListener
 
-                    Tasks.whenAllSuccess<DocumentSnapshot>(tasks)
-                        .addOnSuccessListener { results ->
-                            if (!isAdded) return@addOnSuccessListener
-                            for (snap in results) {
-                                if (snap != null && snap.exists()) {
-                                    val hour = (snap.getLong("hour") ?: 0L).toInt()
-                                    val steps = (snap.getLong("steps") ?: 0L).toInt()
-                                    hourlyMap[hour] = steps
-                                }
+                        var anyFound = false
+                        for (snap in results) {
+                            if (snap != null && snap.exists()) {
+                                val hour = (snap.getLong("hour") ?: 0L).toInt()
+                                val steps = (snap.getLong("steps") ?: 0L).toInt()
+                                hourlyMap[hour] = steps
+                                anyFound = true
                             }
+                        }
+
+                        if (anyFound) {
                             val entriesList = mutableListOf<Entry>()
                             for (h in 0..23) entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
                             drawChart(entriesList)
+                        } else {
+                            // Fallback to query-by-email (older writes may have "email" field)
+                            queryHourlyByEmail(today, idToUse)
                         }
-                        .addOnFailureListener {
-                            drawEmptyChart()
-                        }
-                }
-                .addOnFailureListener {
-                    // Query failed — fallback to per-doc reads (same as above)
-                    val hourlyMap = mutableMapOf<Int, Int>()
-                    for (h in 0..23) hourlyMap[h] = 0
-                    val tasks = mutableListOf<com.google.android.gms.tasks.Task<DocumentSnapshot>>()
-                    for (h in 0..23) {
-                        val docRef = firestore.collection("hourly_stats").document("${idToUse}_${today}_$h")
-                        tasks.add(docRef.get())
                     }
-                    Tasks.whenAllSuccess<DocumentSnapshot>(tasks)
-                        .addOnSuccessListener { results ->
-                            if (!isAdded) return@addOnSuccessListener
-                            for (snap in results) {
-                                if (snap != null && snap.exists()) {
-                                    val hour = (snap.getLong("hour") ?: 0L).toInt()
-                                    val steps = (snap.getLong("steps") ?: 0L).toInt()
-                                    hourlyMap[hour] = steps
-                                }
-                            }
-                            val entriesList = mutableListOf<Entry>()
-                            for (h in 0..23) entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
-                            drawChart(entriesList)
-                        }
-                        .addOnFailureListener {
-                            drawEmptyChart()
-                        }
-                }
+                    .addOnFailureListener {
+                        // If per-doc reads failed for some reason, fallback to query-by-email
+                        queryHourlyByEmail(today, idToUse)
+                    }
+            } else {
+                // No reliable docId / docId == email -> just query by email first (original behavior)
+                queryHourlyByEmail(today, idToUse)
+            }
         }
+    }
+
+    // helper: query hourly_stats by email field, then fallback to per-doc reads if needed
+    private fun queryHourlyByEmail(today: String, idToUse: String) {
+        firestore.collection("hourly_stats")
+            .whereEqualTo("email", email)
+            .whereEqualTo("date", today)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                if (!isAdded) return@addOnSuccessListener
+
+                Log.d(TAG, "queryHourlyByEmail: snapshot size=${snapshot.size()}")
+                if (!snapshot.isEmpty) {
+                    buildChartFromHourlySnapshot(snapshot.documents.map { it.data ?: emptyMap<String, Any>() })
+                } else {
+                    // fallback to per-doc reads (if any exist under idToUse)
+                    val hourlyMap = mutableMapOf<Int, Int>()
+                    for (h in 0..23) hourlyMap[h] = 0
+                    val tasks = mutableListOf<com.google.android.gms.tasks.Task<DocumentSnapshot>>()
+                    for (h in 0..23) {
+                        val docRef = firestore.collection("hourly_stats").document("${idToUse}_${today}_$h")
+                        tasks.add(docRef.get())
+                    }
+                    Tasks.whenAllSuccess<DocumentSnapshot>(tasks)
+                        .addOnSuccessListener { results ->
+                            if (!isAdded) return@addOnSuccessListener
+                            var anyFound = false
+                            for (snap in results) {
+                                if (snap != null && snap.exists()) {
+                                    val hour = (snap.getLong("hour") ?: 0L).toInt()
+                                    val steps = (snap.getLong("steps") ?: 0L).toInt()
+                                    hourlyMap[hour] = steps
+                                    anyFound = true
+                                }
+                            }
+                            if (anyFound) {
+                                val entriesList = mutableListOf<Entry>()
+                                for (h in 0..23) entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
+                                drawChart(entriesList)
+                            } else {
+                                drawEmptyChart()
+                            }
+                        }
+                        .addOnFailureListener {
+                            drawEmptyChart()
+                        }
+                }
+            }
+            .addOnFailureListener {
+                // Query failed -> fallback to per-doc reads
+                val hourlyMap = mutableMapOf<Int, Int>()
+                for (h in 0..23) hourlyMap[h] = 0
+                val tasks = mutableListOf<com.google.android.gms.tasks.Task<DocumentSnapshot>>()
+                for (h in 0..23) {
+                    val docRef = firestore.collection("hourly_stats").document("${idToUse}_${today}_$h")
+                    tasks.add(docRef.get())
+                }
+                Tasks.whenAllSuccess<DocumentSnapshot>(tasks)
+                    .addOnSuccessListener { results ->
+                        if (!isAdded) return@addOnSuccessListener
+                        var anyFound = false
+                        for (snap in results) {
+                            if (snap != null && snap.exists()) {
+                                val hour = (snap.getLong("hour") ?: 0L).toInt()
+                                val steps = (snap.getLong("steps") ?: 0L).toInt()
+                                hourlyMap[hour] = steps
+                                anyFound = true
+                            }
+                        }
+                        if (anyFound) {
+                            val entriesList = mutableListOf<Entry>()
+                            for (h in 0..23) entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
+                            drawChart(entriesList)
+                        } else {
+                            drawEmptyChart()
+                        }
+                    }
+                    .addOnFailureListener {
+                        drawEmptyChart()
+                    }
+            }
     }
 
     private fun buildChartFromHourlySnapshot(listOfMaps: List<Map<String, Any>>) {
@@ -465,6 +583,7 @@ class HomeFragment : Fragment(), SensorEventListener {
         super.onResume()
         // in onResume() before loadUserData():
         email = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
+        lastKnownEmail = email
 
         // Ensure latest profile/goals are shown after returning from ProfileFragment
         if (!email.isNullOrEmpty()) {
@@ -480,6 +599,15 @@ class HomeFragment : Fragment(), SensorEventListener {
     override fun onPause() {
         super.onPause()
         sensorManager?.unregisterListener(this)
+        timeUpdater?.let { handler.removeCallbacks(it) }
+        timeUpdater = null
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        // Cleanup: remove auth listener and unregister sensor
+        try { authStateListener?.let { auth.removeAuthStateListener(it) } } catch (_: Exception) {}
+        try { sensorManager?.unregisterListener(this) } catch (_: Exception) {}
         timeUpdater?.let { handler.removeCallbacks(it) }
         timeUpdater = null
     }

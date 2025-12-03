@@ -243,6 +243,7 @@ class LoginActivity : AppCompatActivity() {
      * 1) Save a minimal session from FirebaseUser and immediately open MainActivity (fast UI).
      * 2) In the background, verify/create the Firestore profile and update the session (async).
      */
+    // inside LoginActivity.kt (replace existing handlePostSignIn)
     private fun handlePostSignIn(uid: String) {
         try {
             val currentUser = auth.currentUser
@@ -250,63 +251,65 @@ class LoginActivity : AppCompatActivity() {
             val displayName = currentUser?.displayName ?: ""
             val (firstGuess, lastGuess) = parseName(displayName)
 
-            // Minimal defaults - used to show UI immediately
             val safeFirst = if (firstGuess.isNotEmpty()) firstGuess else "User"
             val safeLast = lastGuess
             val defaultAge = 25
             val defaultHeight = 170
             val defaultUserType = "Fitness Member"
 
-            // Save an immediate local session so MainActivity / header shows instantly
+            // Save a minimal session so UI in MainActivity can show something immediately
             val localSession = SessionManager(this)
             localSession.saveLoginSession(safeFirst, safeLast, email, defaultAge, defaultHeight, defaultUserType)
 
-            // Start MainActivity immediately with extras so header is instant
-            val intent = Intent(this@LoginActivity, MainActivity::class.java).apply {
-                putExtra("firstName", safeFirst)
-                putExtra("lastName", safeLast)
-                putExtra("userType", defaultUserType)
-                putExtra("email_from_login", email)
-            }
-            startActivity(intent)
-            // We intentionally do NOT finish() immediately — but we can finish the activity once we queued background sync.
-            // We'll finish below after launching background sync.
+            val helper = FirestoreDatabaseHelper()
 
-            // Background sync (non-blocking): ensure Firestore profile exists and update session when authoritative data arrives.
-            Thread {
-                try {
-                    val helper = FirestoreDatabaseHelper()
-                    // helper.getUserDetails uses asynchronous callback; call it and handle result
-                    helper.getUserDetails(email) { existingData ->
-                        try {
-                            val appCtx = applicationContext
-                            val sessionForBg = SessionManager(appCtx)
+            // Attempt to migrate legacy email-doc -> uid doc BEFORE launching MainActivity.
+            // This is asynchronous but we wait for its completion (it should be fast: few reads/writes).
+            helper.migrateEmailDocToUid(email, uid) { migrated ->
+                Log.d(TAG, "migrateEmailDocToUid returned migrated=$migrated for email=$email uid=$uid")
 
-                            if (existingData != null) {
-                                // Authoritative profile exists — update local session with real values
-                                val first = (existingData["firstName"] as? String) ?: safeFirst
-                                val last = (existingData["lastName"] as? String) ?: safeLast
-                                val age = ((existingData["age"] as? Number)?.toInt()) ?: defaultAge
-                                val height = ((existingData["height"] as? Number)?.toInt()) ?: defaultHeight
-                                val userType = (existingData["userType"] as? String) ?: defaultUserType
-                                val emailField = (existingData["email"] as? String) ?: email
+                // After migration attempt (whether migrated or not), run normal profile/sync flow.
+                // Start MainActivity on UI thread.
+                runOnUiThread {
+                    val intent = Intent(this@LoginActivity, MainActivity::class.java).apply {
+                        putExtra("firstName", safeFirst)
+                        putExtra("lastName", safeLast)
+                        putExtra("userType", defaultUserType)
+                        putExtra("email_from_login", email)
+                    }
+                    startActivity(intent)
+                    // finish login activity so user can't go back
+                    finish()
+                }
 
-                                sessionForBg.saveLoginSession(first, last, emailField, age, height, userType)
-                            } else {
-                                // No profile: create one using helper.registerUser (non-blocking)
-                                helper.registerUser(
-                                    email = email,
-                                    password = "", // no local password for social sign-ins
-                                    firstName = safeFirst,
-                                    lastName = safeLast,
-                                    age = defaultAge,
-                                    gender = "Prefer not to say",
-                                    height = defaultHeight.toDouble(),
-                                    weight = 70.0
-                                ) { created ->
-                                    try {
+                // Background: ensure Firestore profile exists / update local session with authoritative data
+                Thread {
+                    try {
+                        helper.getUserDetails(email) { existingData ->
+                            try {
+                                val appCtx = applicationContext
+                                val sessionForBg = SessionManager(appCtx)
+                                if (existingData != null) {
+                                    val first = (existingData["firstName"] as? String) ?: safeFirst
+                                    val last = (existingData["lastName"] as? String) ?: safeLast
+                                    val age = ((existingData["age"] as? Number)?.toInt()) ?: defaultAge
+                                    val height = ((existingData["height"] as? Number)?.toInt()) ?: defaultHeight
+                                    val userType = (existingData["userType"] as? String) ?: defaultUserType
+                                    val emailField = (existingData["email"] as? String) ?: email
+
+                                    sessionForBg.saveLoginSession(first, last, emailField, age, height, userType)
+                                } else {
+                                    helper.registerUser(
+                                        email = email,
+                                        password = "",
+                                        firstName = safeFirst,
+                                        lastName = safeLast,
+                                        age = defaultAge,
+                                        gender = "Prefer not to say",
+                                        height = defaultHeight.toDouble(),
+                                        weight = 70.0
+                                    ) { created ->
                                         if (created) {
-                                            // After creation, fetch details again to get saved values (and update session)
                                             helper.getUserDetails(email) { newData ->
                                                 if (newData != null) {
                                                     val first = (newData["firstName"] as? String) ?: safeFirst
@@ -319,38 +322,29 @@ class LoginActivity : AppCompatActivity() {
                                                 }
                                             }
                                         }
-                                    } catch (_: Exception) { /* ignore background save failures */ }
+                                    }
                                 }
+                            } catch (_: Exception) {
+                                // swallow background exceptions
                             }
-                        } catch (bgEx: Exception) {
-                            // ignore background exceptions — do not block UI
                         }
+                    } catch (_: Exception) {
+                        // ignore background failures
+                    } finally {
+                        // clear per-device step prefs so new account starts fresh on this device
+                        try {
+                            applicationContext.getSharedPreferences("step_prefs", MODE_PRIVATE).edit().clear().apply()
+                        } catch (_: Exception) {}
                     }
-
-                    // Optionally wait a tiny bit (not required). After scheduling background tasks, finish login activity.
-                } catch (ex: Exception) {
-                    // ignore: background sync failure shouldn't affect UX
-                } finally {
-                    // Finish the LoginActivity on the main thread so user can't go back to it.
-                    try {
-                        runOnUiThread {
-                            finish()
-                        }
-                    } catch (_: Exception) { /* ignore */ }
-                }
-            }.start()
+                }.start()
+            }
         } catch (ex: Exception) {
-            // If anything unexpected happens, fallback to a safe route
             try { SessionManager(this).clearSession() } catch (_: Exception) {}
             startActivity(Intent(this@LoginActivity, MainActivity::class.java))
             finish()
         }
-        // clear device step prefs so new account starts fresh on this device
-        try {
-            applicationContext.getSharedPreferences("step_prefs", MODE_PRIVATE).edit().clear().apply()
-        } catch (_: Exception) {}
-
     }
+
 
 
 

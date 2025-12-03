@@ -29,6 +29,16 @@ import com.google.firebase.firestore.FirebaseFirestore
 import java.text.SimpleDateFormat
 import java.util.*
 import com.example.fittrack.FirestoreDatabaseHelper
+import android.graphics.pdf.PdfDocument
+import android.graphics.Paint
+import android.graphics.Bitmap
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.content.ContentValues
+import android.net.Uri
+import java.io.File
+import java.io.FileOutputStream
 
 class HomeFragment : Fragment(), SensorEventListener {
 
@@ -63,9 +73,12 @@ class HomeFragment : Fragment(), SensorEventListener {
     private var stepsGoal = 10000
     private var caloriesGoal = 2000
 
-    // --- auth state listener and last known email to detect changes ---
+    // auth state listener and last known email to detect changes
     private var authStateListener: FirebaseAuth.AuthStateListener? = null
     private var lastKnownEmail: String = ""
+
+    // NEW: PDF button
+    private var btnDownloadPdf: Button? = null
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
@@ -76,13 +89,13 @@ class HomeFragment : Fragment(), SensorEventListener {
         firestore = FirebaseFirestore.getInstance()
         auth = FirebaseAuth.getInstance()
 
-        // Use context-safe initialization for session/prefs/sensors
         context?.let { ctx ->
             session = SessionManager(ctx)
             prefs = ctx.getSharedPreferences("step_prefs", Context.MODE_PRIVATE)
             sensorManager = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
         }
 
+        // Bind UI
         tvGreeting = view.findViewById(R.id.tvGreeting)
         tvDate = view.findViewById(R.id.tvDate)
         tvCurrentSteps = view.findViewById(R.id.tvCurrentSteps)
@@ -92,12 +105,17 @@ class HomeFragment : Fragment(), SensorEventListener {
         progressBar = view.findViewById(R.id.progressBar)
         progressCalories = view.findViewById(R.id.progressCalories)
         chartDaily = view.findViewById(R.id.chartWeekly)
+        btnDownloadPdf = view.findViewById(R.id.btnDownloadPdf)
 
-        // Use email from Firebase if available, else from SessionManager (safe)
+        btnDownloadPdf?.setOnClickListener {
+            generatePdfReport()
+        }
+
+        // Email from Firebase or Session
         email = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
         lastKnownEmail = email
 
-        // Register auth state listener so chart updates immediately when user changes
+        // Auth state listener (for switching user)
         authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
             val newEmail = firebaseAuth.currentUser?.email ?: session.getUserEmail().orEmpty()
             if (newEmail != lastKnownEmail) {
@@ -105,10 +123,10 @@ class HomeFragment : Fragment(), SensorEventListener {
                 lastKnownEmail = newEmail
                 email = newEmail
 
-                // Clear per-device step prefs so initial_steps isn't reused for a different account
+                // Clear step prefs when account changes
                 try { prefs?.edit()?.clear()?.apply() } catch (_: Exception) {}
 
-                // Reset in-memory counters and UI so old user's numbers are not shown
+                // Reset UI
                 totalSteps = 0f
                 goalCompleted = false
                 try {
@@ -118,7 +136,6 @@ class HomeFragment : Fragment(), SensorEventListener {
                     progressCalories?.progress = 0
                 } catch (_: Exception) {}
 
-                // Reload UI for new user (or draw empty if not logged in)
                 if (isAdded) {
                     if (email.isNotEmpty()) {
                         loadUserData()
@@ -143,7 +160,6 @@ class HomeFragment : Fragment(), SensorEventListener {
             if (isAdded) {
                 context?.let { ctx -> Toast.makeText(ctx, "User not logged in!", Toast.LENGTH_SHORT).show() }
             }
-            // still draw empty chart for safety
             drawEmptyChart()
         } else {
             loadUserData()
@@ -163,7 +179,6 @@ class HomeFragment : Fragment(), SensorEventListener {
 
         val helper = FirestoreDatabaseHelper()
         helper.getUserDetails(email) { data ->
-            // Ensure fragment still attached
             if (!isAdded) return@getUserDetails
 
             try {
@@ -175,19 +190,17 @@ class HomeFragment : Fragment(), SensorEventListener {
                     stepsGoal = ((data["daily_steps_goal"] as? Number)?.toInt() ?: 10000)
                     caloriesGoal = ((data["daily_calories_goal"] as? Number)?.toInt() ?: 2000)
 
-                    // Update UI safely
                     tvGreeting?.text = "Welcome, $firstName!"
                     tvSteps?.text = "Goal: $stepsGoal"
-                    tvWeight?.text = "Weight Today: ${"%.1f".format(userWeight)} kg (Target: ${"%.1f".format(targetWeight)} kg)"
+                    tvWeight?.text =
+                        "Weight Today: ${"%.1f".format(userWeight)} kg (Target: ${"%.1f".format(targetWeight)} kg)"
 
                     progressBar?.max = stepsGoal
                     progressCalories?.max = caloriesGoal
 
-                    // load other data
                     loadDailyStats()
                     loadDailyChart()
                 } else {
-                    // no data found -> show zeroed UI for new user
                     tvGreeting?.text = "Welcome!"
                     progressBar?.max = stepsGoal
                     progressCalories?.max = caloriesGoal
@@ -198,7 +211,9 @@ class HomeFragment : Fragment(), SensorEventListener {
                     drawEmptyChart()
                 }
             } catch (ex: Exception) {
-                if (isAdded) context?.let { ctx -> Toast.makeText(ctx, "Error parsing user data", Toast.LENGTH_SHORT).show() }
+                if (isAdded) context?.let { ctx ->
+                    Toast.makeText(ctx, "Error parsing user data", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -210,7 +225,6 @@ class HomeFragment : Fragment(), SensorEventListener {
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
         val helper = FirestoreDatabaseHelper()
 
-        // Resolve the user's doc id first (handles UID or email doc ids)
         helper.getDocIdByEmail(email) { docId ->
             if (!isAdded) return@getDocIdByEmail
 
@@ -227,12 +241,9 @@ class HomeFragment : Fragment(), SensorEventListener {
                         tvCurrentSteps?.text = stepsToday.toString()
                         progressBar?.progress = stepsToday
                         progressCalories?.progress = caloriesToday
-                    } catch (ex: Exception) {
-                        // ignore UI update if fragment not ready
-                    }
+                    } catch (_: Exception) {}
                 }
                 .addOnFailureListener {
-                    // If fetching fails, fallback to showing zero
                     if (!isAdded) return@addOnFailureListener
                     try {
                         tvCalories?.text = "0 / $caloriesGoal"
@@ -255,7 +266,8 @@ class HomeFragment : Fragment(), SensorEventListener {
 
             if (savedDate != today || initialSteps < 0) {
                 initialSteps = event.values[0]
-                prefs?.edit()?.putFloat("initial_steps", initialSteps)?.putString("last_date", today)?.apply()
+                prefs?.edit()?.putFloat("initial_steps", initialSteps)
+                    ?.putString("last_date", today)?.apply()
             }
 
             totalSteps = event.values[0] - initialSteps
@@ -263,7 +275,6 @@ class HomeFragment : Fragment(), SensorEventListener {
             if (userWeight <= 0) userWeight = 70.0
             val calories = calculateCalories(stepsInt, userWeight)
 
-            // Update UI only if added
             if (isAdded) {
                 tvCurrentSteps?.text = stepsInt.toString()
                 tvCalories?.text = "$calories / $caloriesGoal"
@@ -272,7 +283,6 @@ class HomeFragment : Fragment(), SensorEventListener {
                 updateChart()
             }
 
-            // Save to Firestore (safe, async)
             saveStatsToFirestore(today, stepsInt, calories, userWeight)
 
             if (stepsInt >= (progressBar?.max ?: stepsGoal)) {
@@ -287,11 +297,9 @@ class HomeFragment : Fragment(), SensorEventListener {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         val helper = FirestoreDatabaseHelper()
 
-        // Use helper to save daily stats (helper resolves doc id by UID or email)
         try {
             helper.saveDailyStats(email, steps, calories, weight)
         } catch (e: Exception) {
-            // fallback: direct write (rare)
             try {
                 firestore.collection("daily_stats").document("${email}_$date").set(
                     mapOf(
@@ -303,14 +311,12 @@ class HomeFragment : Fragment(), SensorEventListener {
                         "updatedAt" to System.currentTimeMillis()
                     )
                 )
-            } catch (_: Exception) { /* ignore write failure */ }
+            } catch (_: Exception) { }
         }
 
-        // Use helper to save hourly stats (keeps IDs consistent)
         try {
             helper.saveHourlyStats(email, hour, steps, calories, weight)
         } catch (e: Exception) {
-            // fallback: direct write
             try {
                 firestore.collection("hourly_stats").document("${email}_${date}_$hour").set(
                     mapOf(
@@ -323,7 +329,7 @@ class HomeFragment : Fragment(), SensorEventListener {
                         "updatedAt" to System.currentTimeMillis()
                     )
                 )
-            } catch (_: Exception) { /* ignore */ }
+            } catch (_: Exception) { }
         }
     }
 
@@ -336,15 +342,10 @@ class HomeFragment : Fragment(), SensorEventListener {
 
     // ---------------- CHART HANDLING ----------------
     private fun loadDailyChart() {
-        if (!isAdded) {
-            Log.d(TAG, "loadDailyChart: fragment not added -> returning")
-            return
-        }
+        if (!isAdded) return
 
-        // defensive: ensure we've got an email at least
         val currentEmail = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
         if (currentEmail.isEmpty()) {
-            Log.d(TAG, "loadDailyChart: no email available -> drawEmptyChart")
             drawEmptyChart()
             return
         }
@@ -362,7 +363,6 @@ class HomeFragment : Fragment(), SensorEventListener {
             Log.d(TAG, "loadDailyChart: email=$email docId=$docId tryPerDocFirst=$tryPerDocFirst")
 
             if (tryPerDocFirst) {
-                // Attempt per-doc reads first (24 calls). If none exist, fallback to query-by-email.
                 val hourlyMap = mutableMapOf<Int, Int>()
                 for (h in 0..23) hourlyMap[h] = 0
 
@@ -388,25 +388,22 @@ class HomeFragment : Fragment(), SensorEventListener {
 
                         if (anyFound) {
                             val entriesList = mutableListOf<Entry>()
-                            for (h in 0..23) entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
+                            for (h in 0..23)
+                                entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
                             drawChart(entriesList)
                         } else {
-                            // Fallback to query-by-email (older writes may have "email" field)
                             queryHourlyByEmail(today, idToUse)
                         }
                     }
                     .addOnFailureListener {
-                        // If per-doc reads failed for some reason, fallback to query-by-email
                         queryHourlyByEmail(today, idToUse)
                     }
             } else {
-                // No reliable docId / docId == email -> just query by email first (original behavior)
                 queryHourlyByEmail(today, idToUse)
             }
         }
     }
 
-    // helper: query hourly_stats by email field, then fallback to per-doc reads if needed
     private fun queryHourlyByEmail(today: String, idToUse: String) {
         firestore.collection("hourly_stats")
             .whereEqualTo("email", email)
@@ -419,7 +416,6 @@ class HomeFragment : Fragment(), SensorEventListener {
                 if (!snapshot.isEmpty) {
                     buildChartFromHourlySnapshot(snapshot.documents.map { it.data ?: emptyMap<String, Any>() })
                 } else {
-                    // fallback to per-doc reads (if any exist under idToUse)
                     val hourlyMap = mutableMapOf<Int, Int>()
                     for (h in 0..23) hourlyMap[h] = 0
                     val tasks = mutableListOf<com.google.android.gms.tasks.Task<DocumentSnapshot>>()
@@ -441,7 +437,8 @@ class HomeFragment : Fragment(), SensorEventListener {
                             }
                             if (anyFound) {
                                 val entriesList = mutableListOf<Entry>()
-                                for (h in 0..23) entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
+                                for (h in 0..23)
+                                    entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
                                 drawChart(entriesList)
                             } else {
                                 drawEmptyChart()
@@ -453,7 +450,6 @@ class HomeFragment : Fragment(), SensorEventListener {
                 }
             }
             .addOnFailureListener {
-                // Query failed -> fallback to per-doc reads
                 val hourlyMap = mutableMapOf<Int, Int>()
                 for (h in 0..23) hourlyMap[h] = 0
                 val tasks = mutableListOf<com.google.android.gms.tasks.Task<DocumentSnapshot>>()
@@ -475,7 +471,8 @@ class HomeFragment : Fragment(), SensorEventListener {
                         }
                         if (anyFound) {
                             val entriesList = mutableListOf<Entry>()
-                            for (h in 0..23) entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
+                            for (h in 0..23)
+                                entriesList.add(Entry(h.toFloat(), (hourlyMap[h] ?: 0).toFloat()))
                             drawChart(entriesList)
                         } else {
                             drawEmptyChart()
@@ -510,11 +507,10 @@ class HomeFragment : Fragment(), SensorEventListener {
             val dataSet = LineDataSet(entries, "Steps Today")
             val ctx = context ?: return
 
-            // Safe color fetch
             try {
                 dataSet.color = resources.getColor(R.color.blue_700, ctx.theme)
                 dataSet.valueTextColor = resources.getColor(R.color.black, ctx.theme)
-            } catch (_: Exception) {}
+            } catch (_: Exception) { }
 
             dataSet.lineWidth = 2f
             dataSet.circleRadius = 4f
@@ -528,15 +524,147 @@ class HomeFragment : Fragment(), SensorEventListener {
             chartDaily?.xAxis?.granularity = 1f
             chartDaily?.xAxis?.labelCount = 24
             chartDaily?.invalidate()
-        } catch (ex: Exception) {
-            // ignore UI drawing errors if fragment not ready
-        }
+        } catch (_: Exception) { }
     }
 
     private fun drawEmptyChart() {
         val entries = mutableListOf<Entry>()
         for (h in 0..23) entries.add(Entry(h.toFloat(), 0f))
         drawChart(entries)
+    }
+
+    // ---------------- PDF GENERATION ----------------
+    private fun generatePdfReport() {
+        val ctx = context ?: return
+
+        try {
+            val pdfDocument = PdfDocument()
+            val pageWidth = 595
+            val pageHeight = 842
+
+            val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create()
+            val page = pdfDocument.startPage(pageInfo)
+            val canvas = page.canvas
+            val paint = Paint()
+
+            var y = 40f
+
+            paint.textSize = 18f
+            paint.isFakeBoldText = true
+            canvas.drawText("Daily Fitness Report", 40f, y, paint)
+
+            paint.textSize = 12f
+            paint.isFakeBoldText = false
+            y += 25f
+            val todayStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
+            canvas.drawText("Generated: $todayStr", 40f, y, paint)
+
+            y += 30f
+            val stepsText = "Steps Today: ${tvCurrentSteps?.text ?: "0"}"
+            val caloriesText = "Calories: ${tvCalories?.text ?: "0"}"
+            val weightText = "Weight: ${tvWeight?.text ?: "-"}"
+
+            canvas.drawText(stepsText, 40f, y, paint)
+            y += 20f
+            canvas.drawText(caloriesText, 40f, y, paint)
+            y += 20f
+            canvas.drawText(weightText, 40f, y, paint)
+
+            y += 30f
+
+            chartDaily?.let { chart ->
+                try {
+                    chart.measure(
+                        View.MeasureSpec.makeMeasureSpec(chart.width, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(chart.height, View.MeasureSpec.EXACTLY)
+                    )
+                    chart.layout(chart.left, chart.top, chart.right, chart.bottom)
+
+                    val chartBitmap: Bitmap = chart.chartBitmap
+                    val availableWidth = pageWidth - 80
+                    val scale = availableWidth.toFloat() / chartBitmap.width.toFloat()
+                    val bmpHeight = (chartBitmap.height * scale).toInt()
+
+                    val scaledBmp = Bitmap.createScaledBitmap(
+                        chartBitmap,
+                        availableWidth,
+                        bmpHeight,
+                        true
+                    )
+
+                    if (y + bmpHeight > pageHeight - 40) {
+                        y = pageHeight - 40f - bmpHeight
+                    }
+
+                    canvas.drawBitmap(scaledBmp, 40f, y, null)
+                    scaledBmp.recycle()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error drawing chart in PDF", e)
+                    canvas.drawText("Chart could not be rendered in PDF.", 40f, y, paint)
+                }
+            } ?: run {
+                canvas.drawText("No chart data available.", 40f, y, paint)
+            }
+
+            pdfDocument.finishPage(page)
+
+            val fileName =
+                "FitnessReport_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())}.pdf"
+
+            savePdfToDownloads(pdfDocument, fileName)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "generatePdfReport: error", e)
+            Toast.makeText(ctx, "Failed to generate PDF: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun savePdfToDownloads(pdfDocument: PdfDocument, fileName: String) {
+        val ctx = requireContext()
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = ctx.contentResolver
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+
+                val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val itemUri: Uri? = resolver.insert(collection, contentValues)
+
+                if (itemUri != null) {
+                    resolver.openOutputStream(itemUri)?.use { out ->
+                        pdfDocument.writeTo(out)
+                    }
+
+                    contentValues.clear()
+                    contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(itemUri, contentValues, null, null)
+
+                    Toast.makeText(ctx, "PDF saved to Downloads as $fileName", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(ctx, "Failed to create PDF file", Toast.LENGTH_LONG).show()
+                }
+            } else {
+                val downloadsDir =
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!downloadsDir.exists()) downloadsDir.mkdirs()
+
+                val file = File(downloadsDir, fileName)
+                FileOutputStream(file).use { out ->
+                    pdfDocument.writeTo(out)
+                }
+
+                Toast.makeText(ctx, "PDF saved: ${file.absolutePath}", Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "savePdfToDownloads: error", e)
+            Toast.makeText(ctx, "Error saving PDF: ${e.message}", Toast.LENGTH_LONG).show()
+        } finally {
+            pdfDocument.close()
+        }
     }
 
     // ---------------- DATE & GOAL HANDLING ----------------
@@ -578,19 +706,14 @@ class HomeFragment : Fragment(), SensorEventListener {
         builder.show()
     }
 
-    // ---------------- LIFECYCLE HANDLERS ----------------
+    // ---------------- LIFECYCLE ----------------
     override fun onResume() {
         super.onResume()
-        // in onResume() before loadUserData():
         email = auth.currentUser?.email ?: session.getUserEmail().orEmpty()
         lastKnownEmail = email
-
-        // Ensure latest profile/goals are shown after returning from ProfileFragment
-        if (!email.isNullOrEmpty()) {
-            // Re-load user goals and stats from Firestore
+        if (email.isNotEmpty()) {
             loadUserData()
         }
-        // Re-register sensor if needed
         if (!goalCompleted) {
             stepSensor?.let { sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
         }
@@ -605,7 +728,6 @@ class HomeFragment : Fragment(), SensorEventListener {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        // Cleanup: remove auth listener and unregister sensor
         try { authStateListener?.let { auth.removeAuthStateListener(it) } } catch (_: Exception) {}
         try { sensorManager?.unregisterListener(this) } catch (_: Exception) {}
         timeUpdater?.let { handler.removeCallbacks(it) }
